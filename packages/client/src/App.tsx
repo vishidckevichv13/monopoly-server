@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GameState, PlayerState, ClientAction } from '@monopoly/shared';
 import { socket } from './socket/socketClient.js';
 import { initTelegramApp, getCurrentUser, triggerHapticNotification } from './telegram/tma.js';
@@ -42,6 +42,8 @@ export const App: React.FC = () => {
 
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [selectedTileIndex, setSelectedTileIndex] = useState<number | null>(null);
+  const prevTurnRef = useRef<number | null>(null);
+  const prevActivePlayerRef = useRef<number | null>(null);
 
   useEffect(() => {
     initTelegramApp();
@@ -59,6 +61,16 @@ export const App: React.FC = () => {
     });
 
     socket.on('game_state', (state: GameState) => {
+      // Auto-clear inspected tile on new turn or turn phase change so camera tracks the player
+      if (
+        prevTurnRef.current !== state.turnNumber ||
+        prevActivePlayerRef.current !== state.activePlayerIndex
+      ) {
+        prevTurnRef.current = state.turnNumber;
+        prevActivePlayerRef.current = state.activePlayerIndex;
+        setSelectedTileIndex(null);
+      }
+
       setGameState(state);
 
       if (state.turnPhase === 'GAME_OVER' && state.winnerId) {
@@ -128,7 +140,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen max-w-lg mx-auto bg-slate-950 overflow-hidden relative select-none font-sans">
+    <div className="flex flex-col h-full h-[100dvh] w-screen max-w-lg mx-auto bg-slate-950 overflow-hidden relative select-none font-sans safe-top-area safe-bottom-area">
       {!gameState ? (
         <LobbyView
           currentUser={currentUser}
@@ -154,7 +166,7 @@ export const App: React.FC = () => {
             onSelectTile={(tileIdx) => setSelectedTileIndex(tileIdx)}
           />
 
-          {/* Game Event Logs */}
+          {/* Game Event Logs with 50% opacity */}
           <GameLogs logs={gameState.logs} />
 
           {/* Action Area & Selected Tile Bottom Sheet */}

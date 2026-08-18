@@ -13,6 +13,12 @@ declare global {
         ready: () => void;
         expand: () => void;
         close: () => void;
+        requestFullscreen?: () => void;
+        exitFullscreen?: () => void;
+        isFullscreen?: boolean;
+        disableVerticalSwipes?: () => void;
+        enableVerticalSwipes?: () => void;
+        isVerticalSwipesEnabled?: boolean;
         initData: string;
         initDataUnsafe: {
           user?: TelegramUser;
@@ -26,6 +32,18 @@ declare global {
         openTelegramLink: (url: string) => void;
         setHeaderColor: (color: string) => void;
         setBackgroundColor: (color: string) => void;
+        safeAreaInset?: {
+          top: number;
+          bottom: number;
+          left: number;
+          right: number;
+        };
+        contentSafeAreaInset?: {
+          top: number;
+          bottom: number;
+          left: number;
+          right: number;
+        };
       };
     };
   }
@@ -36,9 +54,28 @@ export function initTelegramApp() {
     const tg = window.Telegram.WebApp;
     tg.ready();
     tg.expand();
+
+    // Enable Bot API 8.0 Fullscreen mode
     try {
-      tg.setHeaderColor?.('#0f172a');
-      tg.setBackgroundColor?.('#0f172a');
+      if (typeof tg.requestFullscreen === 'function') {
+        tg.requestFullscreen();
+      }
+    } catch (e) {
+      console.warn('requestFullscreen error', e);
+    }
+
+    // Disable dragging down modal sheet to keep app stable & fullscreen
+    try {
+      if (typeof tg.disableVerticalSwipes === 'function') {
+        tg.disableVerticalSwipes();
+      }
+    } catch (e) {
+      console.warn('disableVerticalSwipes error', e);
+    }
+
+    try {
+      tg.setHeaderColor?.('#0b0f19');
+      tg.setBackgroundColor?.('#0b0f19');
     } catch {
       // Ignored if not supported in old versions
     }

@@ -26,6 +26,7 @@ export interface ActiveRoom {
   sockets: Map<string, string>; // playerId -> socketId
   gameState: GameState | null;
   timerInterval: any;
+  botTurnTimeout: any;
 }
 
 export class RoomManager {
@@ -67,7 +68,8 @@ export class RoomManager {
       players: [initialHost],
       sockets: new Map([[hostPlayer.id, socketId]]),
       gameState: null,
-      timerInterval: null
+      timerInterval: null,
+      botTurnTimeout: null
     };
 
     this.rooms.set(roomId, room);
@@ -127,6 +129,7 @@ export class RoomManager {
       room.players = room.players.filter((p) => p.id !== playerId);
       if (room.players.length === 0) {
         if (room.timerInterval) clearInterval(room.timerInterval);
+        if (room.botTurnTimeout) clearTimeout(room.botTurnTimeout);
         this.rooms.delete(roomId);
         return;
       }
@@ -176,6 +179,9 @@ export class RoomManager {
     room.gameState = createInitialGameState(room.id, room.players, 1500);
     this.startTurnTimer(room);
     this.broadcastGameState(room);
+
+    // If initial player is a bot, start their turn
+    this.processBotTurn(room);
     return true;
   }
 
@@ -211,47 +217,82 @@ export class RoomManager {
     this.processBotTurn(room);
   }
 
-  private processBotTurn(room: ActiveRoom): void {
+  public processBotTurn(room: ActiveRoom): void {
     if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
 
-    const activePlayer = room.gameState.players[room.gameState.activePlayerIndex];
-    if (!activePlayer || !activePlayer.isBot) return;
+    if (room.botTurnTimeout) {
+      clearTimeout(room.botTurnTimeout);
+      room.botTurnTimeout = null;
+    }
 
-    setTimeout(() => {
-      if (!room.gameState) return;
-      const curBot = room.gameState.players[room.gameState.activePlayerIndex];
-      if (!curBot || !curBot.isBot) return;
+    const activePlayer = room.gameState.players[room.gameState.activePlayerIndex];
+    if (!activePlayer || !activePlayer.isBot || activePlayer.isBankrupt) return;
+
+    // Small initial delay before rolling
+    room.botTurnTimeout = setTimeout(() => {
+      if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
+      const bot = room.gameState.players[room.gameState.activePlayerIndex];
+      if (!bot || !bot.isBot) return;
 
       if (room.gameState.turnPhase === 'WAITING_FOR_ROLL') {
-        room.gameState = executeRollDice(room.gameState, curBot.id);
+        room.gameState = executeRollDice(room.gameState, bot.id);
         this.broadcastGameState(room);
 
-        setTimeout(() => {
-          if (!room.gameState) return;
-          const pos = curBot.position;
-          const tile = BOARD_TILES[pos];
+        const diceTotal = room.gameState.lastDiceResult
+          ? room.gameState.lastDiceResult.die1 + room.gameState.lastDiceResult.die2
+          : 5;
+
+        // Allow token hopping animation to finish on client (160ms per step + pause)
+        const hopDuration = Math.max(1200, diceTotal * 170 + 400);
+
+        room.botTurnTimeout = setTimeout(() => {
+          if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
+          const freshBot = room.gameState.players[room.gameState.activePlayerIndex];
+          if (!freshBot || !freshBot.isBot) return;
+
+          // Smart purchase decision on newly landed tile
+          const currentPos = freshBot.position;
+          const tile = BOARD_TILES[currentPos];
+
           if (tile && ['street', 'railroad', 'utility'].includes(tile.type) && tile.cost) {
-            const isOwned = room.gameState.players.some((p: PlayerState) => p.properties.includes(pos));
-            if (!isOwned && curBot.balance >= tile.cost + 100) {
-              room.gameState = executeBuyProperty(room.gameState, curBot.id, pos);
+            const isOwned = room.gameState.players.some((p) => p.properties.includes(currentPos));
+            // Bot buys unowned property if they have enough balance (reserve $50)
+            if (!isOwned && freshBot.balance >= tile.cost) {
+              room.gameState = executeBuyProperty(room.gameState, freshBot.id, currentPos);
+              this.broadcastGameState(room);
             }
           }
 
-          for (const propIdx of curBot.properties) {
+          // Smart upgrade decision (monopolies)
+          for (const propIdx of freshBot.properties) {
             const t = BOARD_TILES[propIdx];
-            if (t && t.houseCost && hasFullMonopoly(curBot.id, t.group, room.gameState.propertyStates, room.gameState.players)) {
-              if (curBot.balance > t.houseCost + 200) {
-                room.gameState = executeUpgradeProperty(room.gameState, curBot.id, propIdx);
+            if (
+              t &&
+              t.houseCost &&
+              hasFullMonopoly(freshBot.id, t.group, room.gameState.propertyStates, room.gameState.players)
+            ) {
+              if (freshBot.balance >= t.houseCost + 150) {
+                room.gameState = executeUpgradeProperty(room.gameState, freshBot.id, propIdx);
+                this.broadcastGameState(room);
               }
             }
           }
 
-          room.gameState = executeEndTurn(room.gameState, curBot.id);
-          this.broadcastGameState(room);
-          this.processBotTurn(room);
-        }, 1200);
+          // Delay before ending turn so logs and results are clearly visible
+          room.botTurnTimeout = setTimeout(() => {
+            if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
+            const endBot = room.gameState.players[room.gameState.activePlayerIndex];
+            if (!endBot || !endBot.isBot) return;
+
+            room.gameState = executeEndTurn(room.gameState, endBot.id);
+            this.broadcastGameState(room);
+
+            // Process next turn if it's also a bot
+            this.processBotTurn(room);
+          }, 800);
+        }, hopDuration);
       }
-    }, 1000);
+    }, 800);
   }
 
   private startTurnTimer(room: ActiveRoom): void {

@@ -78,7 +78,7 @@ const GROUP_COLORS: Record<string, { bg: string; border: string; text: string; h
   }
 };
 
-// Generous square board dimension in pixels for high-res large readable cards
+// Generous square board dimension in pixels
 const BOARD_SIZE = 960;
 const TILE_COUNT_PER_SIDE = 11;
 const TILE_SIZE = BOARD_SIZE / TILE_COUNT_PER_SIDE; // ~87.27px
@@ -88,18 +88,21 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   selectedTileIndex,
   onSelectTile
 }) => {
-  // Camera state: 'follow' (zoomed in on active player) vs 'overview' (full board)
+  // Camera state: 'follow' (focused on active token) vs 'overview' (whole board)
   const [cameraMode, setCameraMode] = useState<'follow' | 'overview'>('follow');
   const [isManualControl, setIsManualControl] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0, initialOffsetX: 0, initialOffsetY: 0 });
+
+  const pointerStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const dragOffsetStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const autoResetTimerRef = useRef<any>(null);
+  const hopIntervalRef = useRef<any>(null);
 
   // Floating Start Reward (+200$) animation
   const [showGoReward, setShowGoReward] = useState<{ id: string; name: string } | null>(null);
 
-  // Animated token positions: map playerId -> display position (tile index)
+  // Animated token positions: map playerId -> display position (tile index 0..39)
   const [animatedPositions, setAnimatedPositions] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
     gameState.players.forEach((p) => {
@@ -114,8 +117,10 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
   const prevPlayersRef = useRef<PlayerState[]>(gameState.players);
   const prevDiceRef = useRef(gameState.lastDiceResult);
+  const prevTurnRef = useRef(gameState.turnNumber);
+  const prevActivePlayerRef = useRef(gameState.activePlayerIndex);
 
-  // Calculate pixel center for each tile index (0..39) on the square board
+  // Calculate pixel center for each tile index (0..39) on the 11x11 square board
   const getTileCenterCoords = (index: number) => {
     let row = 0;
     let col = 0;
@@ -137,22 +142,28 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     return { x, y, row, col };
   };
 
-  // Determine active player & current camera focus tile
+  // Determine active player
   const activePlayer = gameState.players[gameState.activePlayerIndex] || gameState.players[0];
 
-  // Camera focus follows the token step-by-step in real-time
+  // Camera focus follows the active player token step-by-step
   const focusedTileIndex = useMemo(() => {
+    // If a specific tile is clicked by the user to inspect
     if (selectedTileIndex !== null) return selectedTileIndex;
+
+    // If a token is currently hopping, focus on its current hop tile
     if (hoppingPlayerId && animatedPositions[hoppingPlayerId] !== undefined) {
       return animatedPositions[hoppingPlayerId];
     }
+
+    // Default: focus on active player's current token position
     if (activePlayer) {
       return animatedPositions[activePlayer.id] ?? activePlayer.position;
     }
+
     return 0;
   }, [selectedTileIndex, hoppingPlayerId, animatedPositions, activePlayer]);
 
-  // Reset manual control after 8 seconds of idle
+  // Reset manual control after idle
   const resetIdleTimer = () => {
     if (autoResetTimerRef.current) {
       clearTimeout(autoResetTimerRef.current);
@@ -160,132 +171,176 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     autoResetTimerRef.current = setTimeout(() => {
       setIsManualControl(false);
       setDragOffset({ x: 0, y: 0 });
-    }, 8000);
+    }, 6000);
   };
 
-  // Reset camera when dice are rolled
+  // When dice are rolled or turn changes, return camera to follow the active player
   useEffect(() => {
-    if (gameState.lastDiceResult !== prevDiceRef.current) {
+    const diceChanged = gameState.lastDiceResult !== prevDiceRef.current;
+    const turnChanged = gameState.turnNumber !== prevTurnRef.current || gameState.activePlayerIndex !== prevActivePlayerRef.current;
+
+    if (diceChanged || turnChanged) {
       prevDiceRef.current = gameState.lastDiceResult;
+      prevTurnRef.current = gameState.turnNumber;
+      prevActivePlayerRef.current = gameState.activePlayerIndex;
+
       setIsManualControl(false);
       setDragOffset({ x: 0, y: 0 });
       if (autoResetTimerRef.current) clearTimeout(autoResetTimerRef.current);
     }
-  }, [gameState.lastDiceResult, gameState.activePlayerIndex]);
+  }, [gameState.lastDiceResult, gameState.turnNumber, gameState.activePlayerIndex]);
 
-  // Step-by-step token hopping animation and synchronized camera follow
+  // Step-by-step token hopping animation and synchronized camera tracking
   useEffect(() => {
     const prevPlayers = prevPlayersRef.current;
     prevPlayersRef.current = gameState.players;
 
-    gameState.players.forEach((player) => {
+    // Check if active player or another player changed positions
+    const movingPlayer = gameState.players.find((player) => {
       const prev = prevPlayers.find((p) => p.id === player.id);
       const currentPos = animatedPositions[player.id] ?? player.position;
-      const targetPos = player.position;
-
-      if (prev && prev.position !== targetPos && currentPos !== targetPos) {
-        // Calculate shortest clockwise step path
-        const steps: number[] = [];
-        let stepPos = currentPos;
-        while (stepPos !== targetPos) {
-          stepPos = (stepPos + 1) % 40;
-          steps.push(stepPos);
-        }
-
-        if (steps.length > 0) {
-          setHoppingPlayerId(player.id);
-          setIsManualControl(false);
-          setDragOffset({ x: 0, y: 0 });
-
-          let currentStepIdx = 0;
-          const stepInterval = setInterval(() => {
-            if (currentStepIdx < steps.length) {
-              const nextTile = steps[currentStepIdx];
-              setAnimatedPositions((prevMap) => ({
-                ...prevMap,
-                [player.id]: nextTile
-              }));
-
-              triggerHaptic('light');
-
-              // Passed Start / GO bonus detection
-              if (nextTile === 0) {
-                setShowGoReward({ id: player.id, name: player.displayName });
-                setTimeout(() => setShowGoReward(null), 2500);
-              }
-
-              currentStepIdx++;
-            } else {
-              clearInterval(stepInterval);
-              setHoppingPlayerId(null);
-              setLandingPlayerId(player.id);
-              triggerHaptic('heavy');
-              setTimeout(() => setLandingPlayerId(null), 450);
-            }
-          }, 340);
-
-          return () => clearInterval(stepInterval);
-        }
-      } else {
-        // Position matches or newly joined
-        setAnimatedPositions((prevMap) => ({
-          ...prevMap,
-          [player.id]: player.position
-        }));
-      }
+      return prev && prev.position !== player.position && currentPos !== player.position;
     });
+
+    if (movingPlayer) {
+      const currentPos = animatedPositions[movingPlayer.id] ?? movingPlayer.position;
+      const targetPos = movingPlayer.position;
+
+      // Calculate clockwise step-by-step path
+      const steps: number[] = [];
+      let stepPos = currentPos;
+      while (stepPos !== targetPos) {
+        stepPos = (stepPos + 1) % 40;
+        steps.push(stepPos);
+      }
+
+      if (steps.length > 0) {
+        if (hopIntervalRef.current) clearInterval(hopIntervalRef.current);
+
+        setHoppingPlayerId(movingPlayer.id);
+        setIsManualControl(false);
+        setDragOffset({ x: 0, y: 0 });
+
+        let currentStepIdx = 0;
+        hopIntervalRef.current = setInterval(() => {
+          if (currentStepIdx < steps.length) {
+            const nextTile = steps[currentStepIdx];
+            setAnimatedPositions((prevMap) => ({
+              ...prevMap,
+              [movingPlayer.id]: nextTile
+            }));
+
+            triggerHaptic('light');
+
+            // Passed Start / GO bonus detection
+            if (nextTile === 0) {
+              setShowGoReward({ id: movingPlayer.id, name: movingPlayer.displayName });
+              setTimeout(() => setShowGoReward(null), 2500);
+            }
+
+            currentStepIdx++;
+          } else {
+            clearInterval(hopIntervalRef.current);
+            hopIntervalRef.current = null;
+            setHoppingPlayerId(null);
+            setLandingPlayerId(movingPlayer.id);
+            triggerHaptic('heavy');
+            setTimeout(() => setLandingPlayerId(null), 350);
+          }
+        }, 160); // Snappy, smooth 160ms per step
+      }
+    } else {
+      // Sync any static player positions
+      setAnimatedPositions((prevMap) => {
+        let changed = false;
+        const newMap = { ...prevMap };
+        gameState.players.forEach((p) => {
+          if (newMap[p.id] !== p.position && hoppingPlayerId !== p.id) {
+            newMap[p.id] = p.position;
+            changed = true;
+          }
+        });
+        return changed ? newMap : prevMap;
+      });
+    }
+
+    return () => {
+      if (hopIntervalRef.current) {
+        clearInterval(hopIntervalRef.current);
+        hopIntervalRef.current = null;
+      }
+    };
   }, [gameState.players]);
 
-  // Clean up idle timer on unmount
+  // Clean up timers on unmount
   useEffect(() => {
     return () => {
       if (autoResetTimerRef.current) clearTimeout(autoResetTimerRef.current);
+      if (hopIntervalRef.current) clearInterval(hopIntervalRef.current);
     };
   }, []);
 
-  // Drag and Pan handlers
+  // Pointer Down handler
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    setIsDragging(true);
-    setIsManualControl(true);
-    dragStartRef.current = {
+    pointerStartRef.current = {
       x: e.clientX,
       y: e.clientY,
-      initialOffsetX: dragOffset.x,
-      initialOffsetY: dragOffset.y
+      time: Date.now()
     };
-    resetIdleTimer();
+    dragOffsetStartRef.current = { ...dragOffset };
   };
 
+  // Pointer Move handler with drag threshold (distinguish tap from drag)
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDragging) return;
-    const dx = e.clientX - dragStartRef.current.x;
-    const dy = e.clientY - dragStartRef.current.y;
-    setDragOffset({
-      x: dragStartRef.current.initialOffsetX + dx,
-      y: dragStartRef.current.initialOffsetY + dy
-    });
-    resetIdleTimer();
+    if (!pointerStartRef.current) return;
+    const dx = e.clientX - pointerStartRef.current.x;
+    const dy = e.clientY - pointerStartRef.current.y;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist > 6) {
+      if (!isDragging) {
+        setIsDragging(true);
+        setIsManualControl(true);
+      }
+      setDragOffset({
+        x: dragOffsetStartRef.current.x + dx,
+        y: dragOffsetStartRef.current.y + dy
+      });
+      resetIdleTimer();
+    }
   };
 
+  // Pointer Up handler
   const handlePointerUp = () => {
     if (isDragging) {
       setIsDragging(false);
       resetIdleTimer();
     }
+    pointerStartRef.current = null;
   };
 
-  // Compute camera translation & scale in 3D isometric view (Factor 1.0 = dead center)
+  // Compute camera translation & scale in 3D isometric view
   const targetCoords = getTileCenterCoords(focusedTileIndex);
-  const boardCenter = BOARD_SIZE / 2;
+  const boardCenter = BOARD_SIZE / 2; // 480px
 
-  // In follow mode: center on focused tile coordinates exactly
-  const baseCameraX = cameraMode === 'overview' ? 0 : boardCenter - targetCoords.x;
-  const baseCameraY = cameraMode === 'overview' ? 0 : boardCenter - targetCoords.y;
+  // Adjust for 3D perspective - account for rotation and scale
+  const perspectiveFactorX = 0.85; // X-axis perspective adjustment
+  const perspectiveFactorY = 0.75; // Y-axis perspective adjustment
+  const scaleFactor = cameraMode === 'overview' ? 0.42 : 1.0;
+  
+  // In follow mode: center on focused tile with perspective adjustment
+  const baseCameraX = cameraMode === 'overview'
+    ? 0
+    : boardCenter - targetCoords.x * perspectiveFactorX * scaleFactor;
+    
+  const baseCameraY = cameraMode === 'overview'
+    ? 0
+    : boardCenter - targetCoords.y * perspectiveFactorY * scaleFactor;
 
   const totalCameraX = isManualControl ? baseCameraX + dragOffset.x : baseCameraX;
   const totalCameraY = isManualControl ? baseCameraY + dragOffset.y : baseCameraY;
-  const cameraScale = cameraMode === 'overview' ? 0.44 : 1.28;
+  const cameraScale = scaleFactor;
 
   return (
     <div
@@ -295,7 +350,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
     >
-      {/* Attached Anime Sky Island Wallpaper Background ONLY on GameBoard */}
+      {/* Background Wallpaper */}
       <div
         className="absolute inset-0 bg-cover bg-center pointer-events-none z-0 opacity-90"
         style={{ backgroundImage: "url('/background.jpg')" }}
@@ -377,8 +432,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           transition: isDragging
             ? 'none'
             : hoppingPlayerId
-            ? 'transform 0.34s cubic-bezier(0.25, 0.46, 0.45, 0.94)'
-            : 'transform 0.65s cubic-bezier(0.16, 1, 0.3, 1)'
+            ? 'transform 0.16s linear'
+            : 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
         }}
       >
         {/* Central Velvet Board Tray with 3D Monopoly Banner & Dice */}
