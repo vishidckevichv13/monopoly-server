@@ -6,7 +6,7 @@ import {
   TileDefinition,
   hasFullMonopoly
 } from '@monopoly/shared';
-import { Dices, Check, ShoppingBag, ArrowUpCircle, XCircle } from 'lucide-react';
+import { Dices, Check, ShoppingBag, ArrowUpCircle, XCircle, ArrowLeftRight, Gavel, X } from 'lucide-react';
 import { triggerHaptic } from '../telegram/tma.js';
 import { PropertyCard, IsometricCoin } from './PropertyCard.js';
 
@@ -16,6 +16,7 @@ interface BottomActionSheetProps {
   selectedTileIndex: number | null;
   onCloseInspect: () => void;
   onSendAction: (action: ClientAction) => void;
+  onOpenTrade: () => void;
 }
 
 export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
@@ -23,7 +24,8 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
   myPlayerId,
   selectedTileIndex,
   onCloseInspect,
-  onSendAction
+  onSendAction,
+  onOpenTrade
 }) => {
   const activePlayer = gameState.players[gameState.activePlayerIndex];
   const isMyTurn = activePlayer?.id === myPlayerId;
@@ -39,13 +41,14 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
       : undefined;
 
   const currentTile = myPlayer ? BOARD_TILES[myPlayer.position] : null;
-  const canBuyCurrent =
+  const isStandingOnUnowned =
     isMyTurn &&
     gameState.turnPhase === 'AWAITING_ACTION' &&
     currentTile &&
     ['street', 'railroad', 'utility'].includes(currentTile.type) &&
-    !gameState.players.some((p) => p.properties.includes(currentTile.index)) &&
-    (myPlayer?.balance || 0) >= (currentTile.cost || 0);
+    !gameState.players.some((p) => p.properties.includes(currentTile.index));
+
+  const canBuyCurrent = isStandingOnUnowned && (myPlayer?.balance || 0) >= (currentTile?.cost || 0);
 
   const canUpgradeInspected =
     isMyTurn &&
@@ -156,63 +159,104 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
       )}
 
       {/* Main Action Controller */}
-      <div className="flex items-center justify-between gap-3">
-        {/* Contextual Buy Property Action */}
-        {canBuyCurrent && currentTile && (
-          <button
-            onClick={() => {
-              triggerHaptic('heavy');
-              onSendAction({ type: 'BUY_PROPERTY', tileIndex: currentTile.index });
-            }}
-            className="flex-1 py-3.5 btn-3d-green text-white rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition"
-          >
-            <ShoppingBag className="w-5 h-5 text-white" />
-            <span>Купить за ${currentTile.cost}</span>
-          </button>
-        )}
-
-        {/* Big Juicy Arcade 3D Roll Button */}
-        {isMyTurn && gameState.turnPhase === 'WAITING_FOR_ROLL' ? (
-          <div className="flex-1 flex items-center justify-center gap-3">
+      <div className="flex flex-col gap-2 w-full">
+        {/* Contextual Buy Property / Decline to Auction Actions */}
+        {isStandingOnUnowned && currentTile && (
+          <div className="flex items-center gap-2 w-full">
             <button
+              disabled={!canBuyCurrent}
               onClick={() => {
                 triggerHaptic('heavy');
-                onSendAction({ type: 'ROLL_DICE' });
+                onSendAction({ type: 'BUY_PROPERTY', tileIndex: currentTile.index });
               }}
-              className="flex-1 py-4 btn-3d-red text-white font-black text-lg flex items-center justify-center gap-2.5 active:scale-95 tracking-wide drop-shadow-md cursor-pointer"
+              className={`flex-1 py-3.5 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 transition active:scale-95 shadow-lg ${
+                canBuyCurrent
+                  ? 'btn-3d-green text-white cursor-pointer'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-60'
+              }`}
             >
-              <Dices className="w-7 h-7 text-white animate-bounce" />
-              <span className="font-display">БРОСОК</span>
+              <ShoppingBag className="w-4 h-4" />
+              <span>Купить за ${currentTile.cost}</span>
             </button>
 
-            {/* Multiplier Badge Button */}
             <button
-              onClick={toggleMultiplier}
-              className="px-3.5 py-4 bg-gradient-to-b from-amber-400 via-amber-500 to-amber-600 border-2 border-amber-200 text-slate-950 font-black text-sm rounded-2xl shadow-[0_5px_0_#92400e,0_8px_16px_rgba(245,158,11,0.4)] active:translate-y-1 active:shadow-none transition flex items-center gap-1"
-              title="Множитель броска"
+              onClick={() => {
+                triggerHaptic('medium');
+                onSendAction({ type: 'DECLINE_BUY_PROPERTY', tileIndex: currentTile.index });
+              }}
+              className="flex-1 py-3.5 btn-3d-amber text-slate-950 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition shadow-lg"
             >
-              <span className="text-xs">⚡</span>
-              <span>x{multiplier}</span>
+              <Gavel className="w-4 h-4" />
+              <span>На аукцион 🔨</span>
             </button>
           </div>
-        ) : isMyTurn && gameState.turnPhase === 'AWAITING_ACTION' ? (
-          <button
-            onClick={() => {
-              triggerHaptic('medium');
-              onSendAction({ type: 'END_TURN' });
-            }}
-            className="flex-1 py-3.5 btn-3d-blue text-white rounded-2xl font-black text-sm flex items-center justify-center gap-2 active:scale-95 transition"
-          >
-            <Check className="w-5 h-5" />
-            <span>Завершить ход</span>
-          </button>
-        ) : (
-          <div className="w-full py-3.5 bg-slate-800/80 rounded-2xl text-center text-xs font-black text-slate-300 border border-slate-700/60 shadow-inner">
-            {gameState.turnPhase === 'GAME_OVER'
-              ? '🏆 Игра завершена!'
-              : `⏳ Ожидание хода игрока ${activePlayer?.displayName || ''}...`}
-          </div>
         )}
+
+        {/* Action Buttons Row */}
+        <div className="flex items-center justify-between gap-2.5 w-full">
+          {/* Big Juicy Arcade 3D Roll Button */}
+          {isMyTurn && gameState.turnPhase === 'WAITING_FOR_ROLL' ? (
+            <div className="flex-1 flex items-center justify-center gap-3">
+              <button
+                onClick={() => {
+                  triggerHaptic('heavy');
+                  onSendAction({ type: 'ROLL_DICE' });
+                }}
+                className="flex-1 py-4 btn-3d-red text-white font-black text-lg flex items-center justify-center gap-2.5 active:scale-95 tracking-wide drop-shadow-md cursor-pointer"
+              >
+                <Dices className="w-7 h-7 text-white animate-bounce" />
+                <span className="font-display">БРОСОК</span>
+              </button>
+
+              {/* Multiplier Badge Button */}
+              <button
+                onClick={toggleMultiplier}
+                className="px-3.5 py-4 bg-gradient-to-b from-amber-400 via-amber-500 to-amber-600 border-2 border-amber-200 text-slate-950 font-black text-sm rounded-2xl shadow-[0_5px_0_#92400e,0_8px_16px_rgba(245,158,11,0.4)] active:translate-y-1 active:shadow-none transition flex items-center gap-1"
+                title="Множитель броска"
+              >
+                <span className="text-xs">⚡</span>
+                <span>x{multiplier}</span>
+              </button>
+            </div>
+          ) : isMyTurn && gameState.turnPhase === 'AWAITING_ACTION' ? (
+            <div className="flex-1 flex items-center gap-2">
+              {/* Trade Button available during player's turn */}
+              <button
+                onClick={() => {
+                  triggerHaptic('medium');
+                  onOpenTrade();
+                }}
+                className="py-3.5 px-4 bg-slate-800 hover:bg-slate-700 border-2 border-amber-400/60 text-amber-300 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 active:scale-95 transition shadow-md shrink-0"
+              >
+                <ArrowLeftRight className="w-4 h-4" />
+                <span>Обмен 🤝</span>
+              </button>
+
+              {/* End Turn Button */}
+              <button
+                onClick={() => {
+                  triggerHaptic('medium');
+                  onSendAction({ type: 'END_TURN' });
+                }}
+                className="flex-1 py-3.5 btn-3d-blue text-white rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition"
+              >
+                <Check className="w-5 h-5" />
+                <span>Завершить ход</span>
+              </button>
+            </div>
+          ) : gameState.turnPhase === 'AUCTION' ? (
+            <div className="w-full py-3 bg-amber-950/50 rounded-2xl text-center text-xs font-black text-amber-300 border border-amber-500/40 flex items-center justify-center gap-2 animate-pulse">
+              <Gavel className="w-4 h-4" />
+              <span>Идут открытые торги на аукционе...</span>
+            </div>
+          ) : (
+            <div className="w-full py-3.5 bg-slate-800/80 rounded-2xl text-center text-xs font-black text-slate-300 border border-slate-700/60 shadow-inner">
+              {gameState.turnPhase === 'GAME_OVER'
+                ? '🏆 Игра завершена!'
+                : `⏳ Ожидание хода игрока ${activePlayer?.displayName || ''}...`}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

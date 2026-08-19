@@ -34,27 +34,17 @@ html, body {
 }
 
 .safe-top-area {
-  padding-top: max(var(--safe-top), 8px);
+  padding-top: max(var(--safe-top), 48px);
 }
 
 .safe-bottom-area {
-  padding-bottom: max(var(--safe-bottom), 6px);
+  padding-bottom: max(var(--safe-bottom), 8px);
 }
 
-/* 3D Perspective container */
-.board-perspective {
-  perspective: 1400px;
-  perspective-origin: 50% 50%;
-}
-
-/* 3D Isometric Board styling */
-.board-isometric-3d {
-  transform-style: preserve-3d;
-  box-shadow:
-    0 25px 60px rgba(0, 0, 0, 0.7),
-    0 10px 20px rgba(0, 0, 0, 0.4),
-    0 0 0 6px rgba(255, 255, 255, 0.15),
-    0 0 0 10px rgba(15, 23, 42, 0.9);
+/* 2D Flat Square Board Container */
+.board-square-container {
+  aspect-ratio: 1 / 1;
+  flex-shrink: 0;
 }
 
 /* 3D Chunky Casual Tile depth & styling */
@@ -109,126 +99,167 @@ html, body {
 }
 
 .btn-3d-green {
-  background: linear-gradient(180deg, #34d399 0%, #10b981 60%, #047857 100%);
-  border: 2px solid #a7f3d0;
+  background: linear-gradient(180deg, #34d399 0%, #10b981 60%, #059669 100%);
+  border: 3px solid #d1fae5;
+  border-radius: 9999px;
   box-shadow:
-    0 5px 0 #064e3b,
-    0 10px 18px rgba(16, 185, 129, 0.4),
-    inset 0 3px 4px rgba(255, 255, 255, 0.5);
+    0 6px 0 #065f46,
+    0 10px 20px rgba(16, 185, 129, 0.5),
+    inset 0 3px 4px rgba(255, 255, 255, 0.6);
   transition: all 0.12s ease-out;
 }
 
 .btn-3d-green:active {
   transform: translateY(4px);
   box-shadow:
-    0 1px 0 #064e3b,
-    0 4px 8px rgba(16, 185, 129, 0.3);
+    0 2px 0 #065f46,
+    0 4px 8px rgba(16, 185, 129, 0.3),
+    inset 0 1px 2px rgba(255, 255, 255, 0.4);
 }
 
 .btn-3d-blue {
-  background: linear-gradient(180deg, #38bdf8 0%, #0284c7 60%, #0369a1 100%);
-  border: 2px solid #bae6fd;
+  background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 60%, #2563eb 100%);
+  border: 3px solid #dbeafe;
+  border-radius: 9999px;
   box-shadow:
-    0 5px 0 #0c4a6e,
-    0 10px 18px rgba(2, 132, 199, 0.4),
-    inset 0 3px 4px rgba(255, 255, 255, 0.5);
+    0 6px 0 #1e40af,
+    0 10px 20px rgba(59, 130, 246, 0.5),
+    inset 0 3px 4px rgba(255, 255, 255, 0.6);
   transition: all 0.12s ease-out;
 }
 
 .btn-3d-blue:active {
   transform: translateY(4px);
   box-shadow:
-    0 1px 0 #0c4a6e,
-    0 4px 8px rgba(2, 132, 199, 0.3);
+    0 2px 0 #1e40af,
+    0 4px 8px rgba(59, 130, 246, 0.3),
+    inset 0 1px 2px rgba(255, 255, 255, 0.4);
 }
 
-/* Pawn Landing and hop keyframes */
-@keyframes pawn-hop-arc {
+.btn-3d-amber {
+  background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 60%, #d97706 100%);
+  border: 3px solid #fef3c7;
+  border-radius: 9999px;
+  box-shadow:
+    0 6px 0 #92400e,
+    0 10px 20px rgba(245, 158, 11, 0.5),
+    inset 0 3px 4px rgba(255, 255, 255, 0.6);
+  transition: all 0.12s ease-out;
+}
+
+.btn-3d-amber:active {
+  transform: translateY(4px);
+  box-shadow:
+    0 2px 0 #92400e,
+    0 4px 8px rgba(245, 158, 11, 0.3),
+    inset 0 1px 2px rgba(255, 255, 255, 0.4);
+}
+
+.btn-3d-purple {
+  background: linear-gradient(180deg, #c084fc 0%, #9333ea 60%, #7e22ce 100%);
+  border: 3px solid #f3e8ff;
+  border-radius: 9999px;
+  box-shadow:
+    0 6px 0 #581c87,
+    0 10px 20px rgba(147, 51, 234, 0.5),
+    inset 0 3px 4px rgba(255, 255, 255, 0.6);
+  transition: all 0.12s ease-out;
+}
+
+.btn-3d-purple:active {
+  transform: translateY(4px);
+  box-shadow:
+    0 2px 0 #581c87,
+    0 4px 8px rgba(147, 51, 234, 0.3),
+    inset 0 1px 2px rgba(255, 255, 255, 0.4);
+}
+
+/* Pawn Movement Animations */
+@keyframes pawnHopArc {
   0% {
-    transform: translateY(0) scale(1, 1);
+    transform: translateY(0px) scale(1, 1);
   }
   40% {
-    transform: translateY(-26px) scale(0.9, 1.15);
-  }
-  75% {
-    transform: translateY(-4px) scale(1.05, 0.95);
-  }
-  100% {
-    transform: translateY(0) scale(1, 1);
-  }
-}
-
-@keyframes pawn-shadow-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0.65;
-  }
-  40% {
-    transform: scale(0.45);
-    opacity: 0.2;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 0.65;
-  }
-}
-
-@keyframes pawn-land-squish {
-  0% {
-    transform: translateY(-16px) scale(0.9, 1.15);
-  }
-  45% {
-    transform: translateY(0) scale(1.25, 0.75);
-  }
-  70% {
-    transform: translateY(-4px) scale(0.95, 1.05);
-  }
-  100% {
-    transform: translateY(0) scale(1, 1);
-  }
-}
-
-@keyframes float-reward {
-  0% {
-    opacity: 0;
-    transform: translateY(12px) scale(0.85);
-  }
-  15% {
-    opacity: 1;
-    transform: translateY(-8px) scale(1.05);
+    transform: translateY(-28px) scale(1.15, 1.15);
   }
   80% {
-    opacity: 1;
-    transform: translateY(-20px) scale(1);
+    transform: translateY(-8px) scale(1.05, 1.05);
   }
   100% {
+    transform: translateY(0px) scale(1, 1);
+  }
+}
+
+@keyframes pawnShadowPulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  40% {
+    transform: scale(0.5);
+    opacity: 0.25;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+}
+
+@keyframes pawnLandSquish {
+  0% {
+    transform: scale(1.25, 0.75);
+  }
+  45% {
+    transform: scale(0.9, 1.12);
+  }
+  80% {
+    transform: scale(1.05, 0.96);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+@keyframes floatReward {
+  0% {
+    transform: translateY(20px) scale(0.8);
     opacity: 0;
-    transform: translateY(-35px) scale(0.9);
+  }
+  20% {
+    transform: translateY(0px) scale(1.08);
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(-6px) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-20px) scale(0.9);
+    opacity: 0;
   }
 }
 
 .animate-pawn-hop-arc {
-  animation: pawn-hop-arc 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+  animation: pawnHopArc 0.16s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .animate-pawn-shadow-pulse {
-  animation: pawn-shadow-pulse 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+  animation: pawnShadowPulse 0.16s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .animate-pawn-land-squish {
-  animation: pawn-land-squish 0.35s ease-out;
+  animation: pawnLandSquish 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .animate-float-reward {
-  animation: float-reward 2.2s ease-out forwards;
+  animation: floatReward 2.8s ease-out forwards;
 }
 
-/* Custom scrollbars */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+/* Hide scrollbar utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

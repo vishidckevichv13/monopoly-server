@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GameState, PlayerState, ClientAction } from '@monopoly/shared';
+import { GameState, PlayerState, ClientAction, TimerTickPayload } from '@monopoly/shared';
 import { socket } from './socket/socketClient.js';
 import { initTelegramApp, getCurrentUser, triggerHapticNotification } from './telegram/tma.js';
 import { HeaderHUD } from './components/HeaderHUD.js';
 import { GameBoard } from './components/GameBoard.js';
 import { BottomActionSheet } from './components/BottomActionSheet.js';
-import { GameLogs } from './components/GameLogs.js';
+import { AuctionOverlay } from './components/AuctionOverlay.js';
+import { TradeModal } from './components/TradeModal.js';
 import { LobbyView } from './components/LobbyView.js';
 import confetti from 'canvas-confetti';
 import { Trophy, RefreshCw } from 'lucide-react';
@@ -42,6 +43,7 @@ export const App: React.FC = () => {
 
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [selectedTileIndex, setSelectedTileIndex] = useState<number | null>(null);
+  const [isTradeModalOpen, setIsTradeModalOpen] = useState<boolean>(false);
   const prevTurnRef = useRef<number | null>(null);
   const prevActivePlayerRef = useRef<number | null>(null);
 
@@ -83,6 +85,37 @@ export const App: React.FC = () => {
       }
     });
 
+    socket.on('timer_tick', (data: TimerTickPayload) => {
+      setGameState((prev) => {
+        if (!prev) return null;
+        let changed = false;
+        let updated = prev;
+
+        if (prev.turnTimeRemaining !== data.turnTimeRemaining) {
+          updated = { ...updated, turnTimeRemaining: data.turnTimeRemaining };
+          changed = true;
+        }
+
+        if (
+          updated.auctionState &&
+          data.auctionTimeRemaining !== undefined &&
+          data.auctionTimeRemaining !== null &&
+          updated.auctionState.timeRemaining !== data.auctionTimeRemaining
+        ) {
+          updated = {
+            ...updated,
+            auctionState: {
+              ...updated.auctionState,
+              timeRemaining: data.auctionTimeRemaining
+            }
+          };
+          changed = true;
+        }
+
+        return changed ? updated : prev;
+      });
+    });
+
     socket.on('error_message', (data: { message: string }) => {
       triggerHapticNotification('error');
       alert(data.message);
@@ -93,6 +126,7 @@ export const App: React.FC = () => {
       socket.off('room_created');
       socket.off('room_updated');
       socket.off('game_state');
+      socket.off('timer_tick');
       socket.off('error_message');
     };
   }, []);
@@ -137,6 +171,7 @@ export const App: React.FC = () => {
     setCurrentRoom(null);
     setGameState(null);
     setSelectedTileIndex(null);
+    setIsTradeModalOpen(false);
   };
 
   return (
@@ -149,6 +184,7 @@ export const App: React.FC = () => {
           onJoinRoom={handleJoinRoom}
           onAddBot={handleAddBot}
           onStartGame={handleStartGame}
+          onLeaveRoom={handleLeaveRoom}
         />
       ) : (
         <div className="flex-1 flex flex-col h-full justify-between relative overflow-hidden">
@@ -159,15 +195,12 @@ export const App: React.FC = () => {
             onConfirmLeave={handleLeaveRoom}
           />
 
-          {/* 3D Isometric Game Board */}
+          {/* 3D Isometric Game Board with Integrated Floating Event Logs */}
           <GameBoard
             gameState={gameState}
             selectedTileIndex={selectedTileIndex}
             onSelectTile={(tileIdx) => setSelectedTileIndex(tileIdx)}
           />
-
-          {/* Game Event Logs with 50% opacity */}
-          <GameLogs logs={gameState.logs} />
 
           {/* Action Area & Selected Tile Bottom Sheet */}
           <BottomActionSheet
@@ -176,7 +209,28 @@ export const App: React.FC = () => {
             selectedTileIndex={selectedTileIndex}
             onCloseInspect={() => setSelectedTileIndex(null)}
             onSendAction={handleSendAction}
+            onOpenTrade={() => setIsTradeModalOpen(true)}
           />
+
+          {/* Real-Time Live Auction Overlay */}
+          {gameState.turnPhase === 'AUCTION' && gameState.auctionState && (
+            <AuctionOverlay
+              gameState={gameState}
+              myPlayerId={currentUser.id}
+              onSendAction={handleSendAction}
+            />
+          )}
+
+          {/* Trade / Exchange Proposal & Response Modal */}
+          {(isTradeModalOpen || !!gameState.activeTrade) && (
+            <TradeModal
+              gameState={gameState}
+              myPlayerId={currentUser.id}
+              isOpen={isTradeModalOpen}
+              onClose={() => setIsTradeModalOpen(false)}
+              onSendAction={handleSendAction}
+            />
+          )}
 
           {/* Winner Game Over Modal */}
           {gameState.turnPhase === 'GAME_OVER' && (

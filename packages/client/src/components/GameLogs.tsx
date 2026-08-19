@@ -3,9 +3,10 @@ import { GameLogEntry } from '@monopoly/shared';
 
 interface GameLogsProps {
   logs: GameLogEntry[];
+  className?: string;
 }
 
-export const GameLogs: React.FC<GameLogsProps> = ({ logs }) => {
+export const GameLogs: React.FC<GameLogsProps> = ({ logs, className = '' }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -16,32 +17,40 @@ export const GameLogs: React.FC<GameLogsProps> = ({ logs }) => {
 
   return (
     <div
-      className="w-full max-h-24 bg-slate-950/50 backdrop-blur-md border-t border-slate-800/40 px-3 py-1.5 overflow-y-auto no-scrollbar flex flex-col gap-1 text-[11px] z-20 shadow-lg"
-      ref={scrollRef}
+      className={`w-full max-h-24 bg-gradient-to-t from-slate-950/70 via-slate-950/45 to-transparent px-3 pb-2 pt-4 flex flex-col gap-1 text-[11px] z-30 pointer-events-auto [mask-image:linear-gradient(to_bottom,transparent_0%,black_25%)] ${className}`}
     >
-      {logs.slice(-15).map((log) => {
-        return (
-          <div
-            key={log.id}
-            className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg transition-colors backdrop-blur-xs ${
-              log.type === 'buy'
-                ? 'text-emerald-200 bg-emerald-950/40 border border-emerald-500/20'
-                : log.type === 'rent'
-                ? 'text-amber-200 bg-amber-950/40 border border-amber-500/20'
-                : log.type === 'jail'
-                ? 'text-red-200 bg-red-950/40 border border-red-500/20'
-                : log.type === 'bonus'
-                ? 'text-purple-200 bg-purple-950/40 font-bold border border-purple-500/20'
-                : 'text-slate-200 bg-slate-900/30'
-            }`}
-          >
-            <span className="text-[10px] text-slate-400 shrink-0">
-              {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-            <span className="truncate">{log.message}</span>
-          </div>
-        );
-      })}
+      <div
+        ref={scrollRef}
+        className="overflow-y-auto no-scrollbar flex flex-col gap-1 max-h-20"
+      >
+        {logs.slice(-15).map((log) => {
+          return (
+            <div
+              key={log.id}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg transition-colors backdrop-blur-sm ${
+                log.type === 'buy'
+                  ? 'text-emerald-200 bg-emerald-950/50 border border-emerald-500/20'
+                  : log.type === 'rent'
+                  ? 'text-amber-200 bg-amber-950/50 border border-amber-500/20'
+                  : log.type === 'jail'
+                  ? 'text-red-200 bg-red-950/50 border border-red-500/20'
+                  : log.type === 'bonus'
+                  ? 'text-purple-200 bg-purple-950/50 font-bold border border-purple-500/20'
+                  : 'text-slate-200 bg-slate-900/40 border border-slate-700/20'
+              }`}
+            >
+              <span className="text-[9px] text-slate-400 shrink-0 font-mono">
+                {new Date(log.timestamp).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit'
+                })}
+              </span>
+              <span className="truncate drop-shadow">{log.message}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };

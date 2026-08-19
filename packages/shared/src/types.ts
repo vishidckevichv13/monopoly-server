@@ -43,6 +43,7 @@ export interface PlayerPropertyState {
   tileIndex: number;
   level: number; // 0: base, 1-4: houses, 5: hotel
   isMortgaged: boolean;
+  mortgageTurnsLeft?: number;
 }
 
 export interface PlayerState {
@@ -67,6 +68,7 @@ export type TurnPhase =
   | 'WAITING_FOR_ROLL'
   | 'RESOLVING_TILE'
   | 'AWAITING_ACTION'
+  | 'AUCTION'
   | 'TURN_ENDED'
   | 'GAME_OVER';
 
@@ -81,7 +83,27 @@ export interface GameLogEntry {
   timestamp: number;
   playerId?: string;
   message: string;
-  type: 'info' | 'dice' | 'buy' | 'rent' | 'jail' | 'bankrupt' | 'bonus' | 'tax';
+  type: 'info' | 'dice' | 'buy' | 'rent' | 'jail' | 'bankrupt' | 'bonus' | 'tax' | 'auction' | 'trade';
+}
+
+export interface AuctionState {
+  tileIndex: number;
+  currentBid: number;
+  highestBidderId: string | null;
+  activeParticipantIds: string[]; // Player IDs who haven't passed
+  timeRemaining: number; // Seconds left in auction
+}
+
+export interface TradeOffer {
+  id: string;
+  initiatorId: string;
+  targetId: string;
+  offerMoney: number;
+  offerProperties: number[];
+  requestMoney: number;
+  requestProperties: number[];
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED';
+  createdAt: number;
 }
 
 export interface GameState {
@@ -96,6 +118,8 @@ export interface GameState {
   winnerId: string | null;
   logs: GameLogEntry[];
   jackpot: number;
+  auctionState: AuctionState | null;
+  activeTrade: TradeOffer | null;
 }
 
 export interface RoomSettings {
@@ -115,10 +139,29 @@ export interface RoomSummary {
   isPrivate: boolean;
 }
 
+export interface TimerTickPayload {
+  turnTimeRemaining: number;
+  auctionTimeRemaining?: number | null;
+}
+
 // Client to Server Action Payloads
 export type ClientAction =
   | { type: 'ROLL_DICE' }
   | { type: 'BUY_PROPERTY'; tileIndex: number }
+  | { type: 'DECLINE_BUY_PROPERTY'; tileIndex: number }
+  | { type: 'AUCTION_BID'; amount: number }
+  | { type: 'AUCTION_PASS' }
+  | {
+      type: 'PROPOSE_TRADE';
+      targetPlayerId: string;
+      offerMoney: number;
+      offerProperties: number[];
+      requestMoney: number;
+      requestProperties: number[];
+    }
+  | { type: 'ACCEPT_TRADE'; tradeId: string }
+  | { type: 'REJECT_TRADE'; tradeId: string }
+  | { type: 'CANCEL_TRADE'; tradeId: string }
   | { type: 'UPGRADE_PROPERTY'; tileIndex: number }
   | { type: 'DOWNGRADE_PROPERTY'; tileIndex: number }
   | { type: 'MORTGAGE_PROPERTY'; tileIndex: number }

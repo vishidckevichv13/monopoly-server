@@ -6,10 +6,22 @@ import {
   createInitialGameState,
   executeRollDice,
   executeBuyProperty,
+  executeStartAuction,
+  executeAuctionBid,
+  executeAuctionPass,
+  executeEndAuction,
+  executeProposeTrade,
+  executeAcceptTrade,
+  executeRejectTrade,
+  executeCancelTrade,
   executeUpgradeProperty,
+  executeMortgageProperty,
+  executeUnmortgageProperty,
+  executePayJailFine,
   executeEndTurn,
   executeSurrender,
   BOARD_TILES,
+  GAME_RULES,
   hasFullMonopoly
 } from '@monopoly/shared';
 
@@ -37,19 +49,29 @@ export class RoomManager {
     this.io = io;
   }
 
+  private generateUniqueRoomId(): string {
+    let id: string;
+    let attempts = 0;
+    do {
+      id = Math.floor(100000 + Math.random() * 900000).toString();
+      attempts++;
+    } while (this.rooms.has(id) && attempts < 100);
+    return id;
+  }
+
   public createRoom(
     hostPlayer: Omit<PlayerState, 'balance' | 'position' | 'inJail' | 'jailTurns' | 'isBankrupt' | 'doublesRolledCount' | 'properties'>,
     socketId: string,
     isPrivate: boolean = false
   ): ActiveRoom {
-    const roomId = 'room_' + Math.random().toString(36).substring(2, 8);
-    const inviteCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const roomId = this.generateUniqueRoomId();
+    const inviteCode = roomId;
 
     const initialHost: PlayerState = {
       ...hostPlayer,
       color: PLAYER_COLORS[0],
       tokenIndex: 0,
-      balance: 1500,
+      balance: GAME_RULES.STARTING_BALANCE_CLASSIC,
       position: 0,
       inJail: false,
       jailTurns: 0,
@@ -99,7 +121,7 @@ export class RoomManager {
       ...player,
       color: PLAYER_COLORS[colorIndex],
       tokenIndex: colorIndex,
-      balance: 1500,
+      balance: GAME_RULES.STARTING_BALANCE_CLASSIC,
       position: 0,
       inJail: false,
       jailTurns: 0,
@@ -120,44 +142,38 @@ export class RoomManager {
     room.sockets.delete(playerId);
 
     if (room.gameState) {
-      // If player leaves active game, surrender them
       room.gameState = executeSurrender(room.gameState, playerId);
       this.broadcastGameState(room);
-      this.processBotTurn(room);
     } else {
-      // If still in lobby, remove player from list
-      room.players = room.players.filter((p) => p.id !== playerId);
-      if (room.players.length === 0) {
-        if (room.timerInterval) clearInterval(room.timerInterval);
-        if (room.botTurnTimeout) clearTimeout(room.botTurnTimeout);
-        this.rooms.delete(roomId);
-        return;
-      }
-      if (room.hostId === playerId) {
+      room.players = room.players.filter((p: PlayerState) => p.id !== playerId);
+      if (room.hostId === playerId && room.players.length > 0) {
         room.hostId = room.players[0].id;
       }
       this.broadcastRoom(room);
+    }
+
+    if (room.players.length === 0 || (room.gameState && room.players.every((p: PlayerState) => p.isBot || p.isBankrupt))) {
+      if (room.timerInterval) clearInterval(room.timerInterval);
+      if (room.botTurnTimeout) clearTimeout(room.botTurnTimeout);
+      this.rooms.delete(roomId);
     }
   }
 
   public addBot(roomId: string): boolean {
     const room = this.rooms.get(roomId);
-    if (!room || room.gameState || room.players.length >= room.maxPlayers) return false;
+    if (!room || room.gameState || room.players.length >= room.maxPlayers) {
+      return false;
+    }
 
-    const botNames = ['Бот Алекс 🤖', 'Бот Виктория 🤖', 'Бот Макс 🤖'];
-    const botIdx = room.players.filter((p: PlayerState) => p.isBot).length;
-    const name = botNames[botIdx % botNames.length] || `Бот ${botIdx + 1} 🤖`;
-    const botId = 'bot_' + Math.random().toString(36).substring(2, 7);
-
+    const botNumber = room.players.filter((p: PlayerState) => p.isBot).length + 1;
     const colorIndex = room.players.length % PLAYER_COLORS.length;
     const botPlayer: PlayerState = {
-      id: botId,
-      username: botId,
-      displayName: name,
-      avatarUrl: '',
+      id: `bot_${Math.random().toString(36).substring(2, 7)}`,
+      username: `bot_${botNumber}`,
+      displayName: `Сбер AI #${botNumber}`,
       color: PLAYER_COLORS[colorIndex],
       tokenIndex: colorIndex,
-      balance: 1500,
+      balance: GAME_RULES.STARTING_BALANCE_CLASSIC,
       position: 0,
       inJail: false,
       jailTurns: 0,
@@ -172,15 +188,28 @@ export class RoomManager {
     return true;
   }
 
-  public startGame(roomId: string): boolean {
+  public removeBot(roomId: string, botId: string): boolean {
     const room = this.rooms.get(roomId);
-    if (!room || room.players.length < 2) return false;
+    if (!room || room.gameState) return false;
 
-    room.gameState = createInitialGameState(room.id, room.players, 1500);
+    const hadBot = room.players.some((p: PlayerState) => p.id === botId && p.isBot);
+    if (!hadBot) return false;
+
+    room.players = room.players.filter((p: PlayerState) => p.id !== botId);
+    this.broadcastRoom(room);
+    return true;
+  }
+
+  public startGame(roomId: string, hostPlayerId?: string): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room || (hostPlayerId && room.hostId !== hostPlayerId) || room.players.length < 2) {
+      return false;
+    }
+
+    room.gameState = createInitialGameState(roomId, room.players, GAME_RULES.STARTING_BALANCE_CLASSIC);
     this.startTurnTimer(room);
     this.broadcastGameState(room);
 
-    // If initial player is a bot, start their turn
     this.processBotTurn(room);
     return true;
   }
@@ -198,8 +227,48 @@ export class RoomManager {
       case 'BUY_PROPERTY':
         nextState = executeBuyProperty(nextState, playerId, action.tileIndex);
         break;
+      case 'DECLINE_BUY_PROPERTY':
+        nextState = executeStartAuction(nextState, action.tileIndex);
+        break;
+      case 'AUCTION_BID':
+        nextState = executeAuctionBid(nextState, playerId, action.amount);
+        break;
+      case 'AUCTION_PASS':
+        nextState = executeAuctionPass(nextState, playerId);
+        break;
+      case 'PROPOSE_TRADE':
+        nextState = executeProposeTrade(
+          nextState,
+          playerId,
+          action.targetPlayerId,
+          action.offerMoney,
+          action.offerProperties,
+          action.requestMoney,
+          action.requestProperties
+        );
+        break;
+      case 'ACCEPT_TRADE':
+        nextState = executeAcceptTrade(nextState, playerId, action.tradeId);
+        break;
+      case 'REJECT_TRADE':
+        nextState = executeRejectTrade(nextState, playerId, action.tradeId);
+        break;
+      case 'CANCEL_TRADE':
+        nextState = executeCancelTrade(nextState, playerId, action.tradeId);
+        break;
       case 'UPGRADE_PROPERTY':
         nextState = executeUpgradeProperty(nextState, playerId, action.tileIndex);
+        break;
+      case 'DOWNGRADE_PROPERTY':
+        break;
+      case 'MORTGAGE_PROPERTY':
+        nextState = executeMortgageProperty(nextState, playerId, action.tileIndex);
+        break;
+      case 'UNMORTGAGE_PROPERTY':
+        nextState = executeUnmortgageProperty(nextState, playerId, action.tileIndex);
+        break;
+      case 'PAY_JAIL_FINE':
+        nextState = executePayJailFine(nextState, playerId);
         break;
       case 'END_TURN':
         nextState = executeEndTurn(nextState, playerId);
@@ -225,6 +294,59 @@ export class RoomManager {
       room.botTurnTimeout = null;
     }
 
+    // Handle Bot in Auction
+    if (room.gameState.turnPhase === 'AUCTION' && room.gameState.auctionState) {
+      const auction = room.gameState.auctionState;
+      const tile = BOARD_TILES[auction.tileIndex];
+      const botParticipants = room.gameState.players.filter(
+        (p: PlayerState) => p.isBot && !p.isBankrupt && auction.activeParticipantIds.includes(p.id)
+      );
+
+      if (botParticipants.length > 0) {
+        // Schedule bot auction decision
+        room.botTurnTimeout = setTimeout(() => {
+          if (!room.gameState || room.gameState.turnPhase !== 'AUCTION' || !room.gameState.auctionState) return;
+          const currentAuction = room.gameState.auctionState;
+          const bot = botParticipants[Math.floor(Math.random() * botParticipants.length)];
+          if (!bot || !currentAuction.activeParticipantIds.includes(bot.id)) return;
+
+          const maxWillingPrice = tile && tile.cost ? Math.min(tile.cost * 1.1, bot.balance - 100) : 0;
+          const nextBid = currentAuction.currentBid + (currentAuction.highestBidderId ? 10 : 0);
+
+          if (nextBid <= maxWillingPrice && currentAuction.highestBidderId !== bot.id) {
+            room.gameState = executeAuctionBid(room.gameState, bot.id, nextBid);
+          } else {
+            room.gameState = executeAuctionPass(room.gameState, bot.id);
+          }
+
+          this.broadcastGameState(room);
+          this.processBotTurn(room);
+        }, 1200 + Math.random() * 1000);
+      }
+      return;
+    }
+
+    // Handle Bot in Active Trade Offer (if target is a bot)
+    if (room.gameState.activeTrade) {
+      const trade = room.gameState.activeTrade;
+      const targetBot = room.gameState.players.find((p: PlayerState) => p.id === trade.targetId && p.isBot);
+      if (targetBot) {
+        room.botTurnTimeout = setTimeout(() => {
+          if (!room.gameState || !room.gameState.activeTrade) return;
+          // Simple bot logic: accept if receiving money >= 0 and not losing vital monopoly
+          const offerVal = trade.offerMoney + trade.offerProperties.reduce((acc, idx) => acc + (BOARD_TILES[idx]?.cost || 0), 0);
+          const reqVal = trade.requestMoney + trade.requestProperties.reduce((acc, idx) => acc + (BOARD_TILES[idx]?.cost || 0), 0);
+          if (offerVal >= reqVal && targetBot.balance >= trade.requestMoney) {
+            room.gameState = executeAcceptTrade(room.gameState, targetBot.id, trade.id);
+          } else {
+            room.gameState = executeRejectTrade(room.gameState, targetBot.id, trade.id);
+          }
+          this.broadcastGameState(room);
+        }, 1500);
+        return;
+      }
+    }
+
     const activePlayer = room.gameState.players[room.gameState.activePlayerIndex];
     if (!activePlayer || !activePlayer.isBot || activePlayer.isBankrupt) return;
 
@@ -242,7 +364,6 @@ export class RoomManager {
           ? room.gameState.lastDiceResult.die1 + room.gameState.lastDiceResult.die2
           : 5;
 
-        // Allow token hopping animation to finish on client (160ms per step + pause)
         const hopDuration = Math.max(1200, diceTotal * 170 + 400);
 
         room.botTurnTimeout = setTimeout(() => {
@@ -250,16 +371,23 @@ export class RoomManager {
           const freshBot = room.gameState.players[room.gameState.activePlayerIndex];
           if (!freshBot || !freshBot.isBot) return;
 
-          // Smart purchase decision on newly landed tile
+          // Purchase decision on newly landed tile
           const currentPos = freshBot.position;
           const tile = BOARD_TILES[currentPos];
 
           if (tile && ['street', 'railroad', 'utility'].includes(tile.type) && tile.cost) {
-            const isOwned = room.gameState.players.some((p) => p.properties.includes(currentPos));
-            // Bot buys unowned property if they have enough balance (reserve $50)
-            if (!isOwned && freshBot.balance >= tile.cost) {
-              room.gameState = executeBuyProperty(room.gameState, freshBot.id, currentPos);
-              this.broadcastGameState(room);
+            const isOwned = room.gameState.players.some((p: PlayerState) => p.properties.includes(currentPos));
+            if (!isOwned) {
+              if (freshBot.balance >= tile.cost) {
+                room.gameState = executeBuyProperty(room.gameState, freshBot.id, currentPos);
+                this.broadcastGameState(room);
+              } else {
+                // If bot cannot afford to buy, decline and start auction
+                room.gameState = executeStartAuction(room.gameState, currentPos);
+                this.broadcastGameState(room);
+                this.processBotTurn(room);
+                return;
+              }
             }
           }
 
@@ -278,7 +406,7 @@ export class RoomManager {
             }
           }
 
-          // Delay before ending turn so logs and results are clearly visible
+          // Delay before ending turn
           room.botTurnTimeout = setTimeout(() => {
             if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
             const endBot = room.gameState.players[room.gameState.activePlayerIndex];
@@ -287,7 +415,6 @@ export class RoomManager {
             room.gameState = executeEndTurn(room.gameState, endBot.id);
             this.broadcastGameState(room);
 
-            // Process next turn if it's also a bot
             this.processBotTurn(room);
           }, 800);
         }, hopDuration);
@@ -304,19 +431,52 @@ export class RoomManager {
         return;
       }
 
+      // Handle Auction Phase Timer
+      if (room.gameState.turnPhase === 'AUCTION' && room.gameState.auctionState) {
+        room.gameState.auctionState.timeRemaining -= 1;
+        if (room.gameState.auctionState.timeRemaining <= 0) {
+          room.gameState = executeEndAuction(room.gameState);
+          this.broadcastGameState(room);
+          this.processBotTurn(room);
+        } else {
+          this.io.to(room.id).emit('timer_tick', {
+            turnTimeRemaining: room.gameState.turnTimeRemaining,
+            auctionTimeRemaining: room.gameState.auctionState.timeRemaining
+          });
+        }
+        return;
+      }
+
       room.gameState.turnTimeRemaining -= 1;
 
       if (room.gameState.turnTimeRemaining <= 0) {
         const activePlayer = room.gameState.players[room.gameState.activePlayerIndex];
         if (room.gameState.turnPhase === 'WAITING_FOR_ROLL') {
           room.gameState = executeRollDice(room.gameState, activePlayer.id);
+        } else if (room.gameState.turnPhase === 'AWAITING_ACTION') {
+          // If player landed on an unowned property and timer ran out, start auction!
+          const currentPos = activePlayer.position;
+          const currentTile = BOARD_TILES[currentPos];
+          const isUnowned =
+            currentTile &&
+            ['street', 'railroad', 'utility'].includes(currentTile.type) &&
+            !room.gameState.players.some((p: PlayerState) => p.properties.includes(currentPos));
+
+          if (isUnowned) {
+            room.gameState = executeStartAuction(room.gameState, currentPos);
+          } else {
+            room.gameState = executeEndTurn(room.gameState, activePlayer.id);
+          }
         } else {
           room.gameState = executeEndTurn(room.gameState, activePlayer.id);
         }
         this.broadcastGameState(room);
         this.processBotTurn(room);
       } else {
-        this.io.to(room.id).emit('timer_tick', { remaining: room.gameState.turnTimeRemaining });
+        this.io.to(room.id).emit('timer_tick', {
+          turnTimeRemaining: room.gameState.turnTimeRemaining,
+          auctionTimeRemaining: room.gameState.auctionState ? room.gameState.auctionState.timeRemaining : null
+        });
       }
     }, 1000);
   }
@@ -338,5 +498,22 @@ export class RoomManager {
 
   public getRoom(roomId: string): ActiveRoom | undefined {
     return this.rooms.get(roomId);
+  }
+
+  public getRoomList(): any[] {
+    const list: any[] = [];
+    this.rooms.forEach((room) => {
+      if (!room.isPrivate && !room.gameState) {
+        list.push({
+          id: room.id,
+          name: room.name,
+          playerCount: room.players.length,
+          maxPlayers: room.maxPlayers,
+          isGameStarted: !!room.gameState,
+          isPrivate: room.isPrivate
+        });
+      }
+    });
+    return list;
   }
 }
