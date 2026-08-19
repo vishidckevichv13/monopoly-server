@@ -34,6 +34,9 @@ export interface TileDefinition {
   mortgage?: number;
   taxAmount?: number;
   icon?: string;
+  brandColor?: string;
+  accentColor?: string;
+  ticker?: string;
 }
 
 export interface PlayerPropertyState {

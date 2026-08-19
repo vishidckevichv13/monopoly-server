@@ -8,6 +8,7 @@ import {
 } from '@monopoly/shared';
 import { Dices, Check, ShoppingBag, ArrowUpCircle, XCircle } from 'lucide-react';
 import { triggerHaptic } from '../telegram/tma.js';
+import { PropertyCard, IsometricCoin } from './PropertyCard.js';
 
 interface BottomActionSheetProps {
   gameState: GameState;
@@ -66,65 +67,91 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
 
   return (
     <div className="w-full bg-slate-900/95 backdrop-blur-2xl border-t-2 border-slate-700/80 p-3 pb-6 flex flex-col gap-2.5 z-40 rounded-t-[32px] shadow-[0_-8px_32px_rgba(0,0,0,0.6)]">
-      {/* Inspected Tile Sheet View */}
+      {/* Inspected Tile Sheet View with Authentic SVG Card Design */}
       {inspectedTile && (
-        <div className="bg-white rounded-2xl p-3.5 border-2 border-amber-300 shadow-xl flex flex-col gap-2 relative animate-fade-in text-slate-900">
+        <div className="bg-slate-800/95 backdrop-blur-md rounded-3xl p-3 border-2 border-slate-600 shadow-2xl flex flex-col items-center gap-3 relative animate-fade-in text-white">
           <button
             onClick={() => {
               triggerHaptic('light');
               onCloseInspect();
             }}
-            className="absolute top-2 right-2 text-slate-400 hover:text-slate-700 p-1 rounded-full transition"
+            className="absolute top-2.5 right-2.5 text-slate-400 hover:text-white p-1 rounded-full transition z-30 bg-slate-900/60"
           >
-            <XCircle className="w-5 h-5 text-slate-500" />
+            <XCircle className="w-5 h-5 text-slate-300" />
           </button>
 
-          <div className="flex items-center gap-2.5">
-            <span className="text-2xl filter drop-shadow">{inspectedTile.icon || '🏷️'}</span>
-            <div>
-              <div className="text-sm font-black text-slate-900 leading-none">
-                {inspectedTile.name}
-              </div>
-              <div className="text-xs font-bold text-slate-500 mt-0.5">
-                {inspectedOwner
-                  ? `Владелец: ${inspectedOwner.displayName}`
-                  : 'Свободно для покупки'}
-              </div>
+          <div className="flex flex-col sm:flex-row items-center gap-4 w-full justify-center">
+            {/* Authentic SVG Card Preview */}
+            <div className="transform hover:scale-[1.02] transition">
+              <PropertyCard
+                tile={inspectedTile}
+                owner={inspectedOwner}
+                level={inspectedPropState?.level || 0}
+                isMortgaged={inspectedPropState?.isMortgaged || false}
+                variant="full"
+              />
+            </div>
+
+            {/* Side Rent & Upgrade Details Table */}
+            <div className="flex-1 flex flex-col justify-between gap-2.5 w-full max-w-[280px]">
+              {inspectedTile.rent && (
+                <div className="bg-slate-900/90 p-3 rounded-2xl border border-slate-700 flex flex-col gap-1.5 text-xs font-bold shadow-inner">
+                  <div className="text-[11px] text-amber-300 font-extrabold uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <span>Тарифная сетка</span>
+                    <IsometricCoin size={14} />
+                  </div>
+                  <div className="flex justify-between items-center py-0.5 border-b border-slate-800">
+                    <span className="text-slate-400">Базовая аренда:</span>
+                    <span className="text-emerald-400 font-black">${inspectedTile.rent[0]}</span>
+                  </div>
+                  {inspectedTile.rent[1] !== undefined && (
+                    <div className="flex justify-between items-center py-0.5 border-b border-slate-800">
+                      <span className="text-slate-400">1 филиал:</span>
+                      <span className="text-emerald-400 font-black">${inspectedTile.rent[1]}</span>
+                    </div>
+                  )}
+                  {inspectedTile.rent[2] !== undefined && (
+                    <div className="flex justify-between items-center py-0.5 border-b border-slate-800">
+                      <span className="text-slate-400">2 филиала:</span>
+                      <span className="text-emerald-400 font-black">${inspectedTile.rent[2]}</span>
+                    </div>
+                  )}
+                  {inspectedTile.rent[3] !== undefined && (
+                    <div className="flex justify-between items-center py-0.5 border-b border-slate-800">
+                      <span className="text-slate-400">3 филиала:</span>
+                      <span className="text-emerald-400 font-black">${inspectedTile.rent[3]}</span>
+                    </div>
+                  )}
+                  {inspectedTile.rent[4] !== undefined && (
+                    <div className="flex justify-between items-center py-0.5 border-b border-slate-800">
+                      <span className="text-slate-400">4 филиала:</span>
+                      <span className="text-emerald-400 font-black">${inspectedTile.rent[4]}</span>
+                    </div>
+                  )}
+                  {inspectedTile.rent[5] !== undefined && (
+                    <div className="flex justify-between items-center py-0.5">
+                      <span className="text-slate-400">Главный офис (Отель):</span>
+                      <span className="text-amber-400 font-black">${inspectedTile.rent[5]}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Upgrade Action inside Inspect */}
+              {canUpgradeInspected && (
+                <button
+                  onClick={() => {
+                    triggerHaptic('heavy');
+                    onSendAction({ type: 'UPGRADE_PROPERTY', tileIndex: inspectedTile.index });
+                  }}
+                  className="w-full py-3 btn-3d-blue text-white text-xs font-black rounded-2xl flex items-center justify-center gap-2 shadow-xl active:scale-95 transition"
+                >
+                  <ArrowUpCircle className="w-5 h-5 text-white" />
+                  <span>Построить филиал (${inspectedTile.houseCost})</span>
+                </button>
+              )}
             </div>
           </div>
-
-          {/* Rent info table */}
-          {inspectedTile.rent && (
-            <div className="grid grid-cols-3 gap-1.5 text-xs bg-slate-100 p-2.5 rounded-xl border border-slate-200 font-bold">
-              <div className="text-slate-600">
-                Базовая: <span className="text-emerald-700">${inspectedTile.rent[0]}</span>
-              </div>
-              {inspectedTile.rent[1] && (
-                <div className="text-slate-600">
-                  1 филиал: <span className="text-emerald-700">${inspectedTile.rent[1]}</span>
-                </div>
-              )}
-              {inspectedTile.rent[5] && (
-                <div className="text-slate-600">
-                  Отель: <span className="text-red-600 font-black">${inspectedTile.rent[5]}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Upgrade Action inside Inspect */}
-          {canUpgradeInspected && (
-            <button
-              onClick={() => {
-                triggerHaptic('heavy');
-                onSendAction({ type: 'UPGRADE_PROPERTY', tileIndex: inspectedTile.index });
-              }}
-              className="w-full py-2.5 btn-3d-blue text-white text-xs font-black rounded-xl flex items-center justify-center gap-1.5 shadow-lg active:scale-95 transition"
-            >
-              <ArrowUpCircle className="w-4 h-4 text-white" />
-              <span>Построить филиал (${inspectedTile.houseCost})</span>
-            </button>
-          )}
         </div>
       )}
 

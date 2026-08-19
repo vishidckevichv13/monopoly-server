@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { GameState, BOARD_TILES, PlayerState } from '@monopoly/shared';
 import { triggerHaptic } from '../telegram/tma.js';
 import { Eye, Focus, Sparkles } from 'lucide-react';
+import { PropertyCard } from './PropertyCard.js';
 
 interface GameBoardProps {
   gameState: GameState;
@@ -83,6 +84,49 @@ const BOARD_SIZE = 960;
 const TILE_COUNT_PER_SIDE = 11;
 const TILE_SIZE = BOARD_SIZE / TILE_COUNT_PER_SIDE; // ~87.27px
 
+// 3D Isometric View Parameters
+const BOARD_ROTATION_Z_DEG = -35; // Yaw
+const BOARD_TILT_X_DEG = 45;      // Pitch
+const PERSPECTIVE_PX = 2000;      // Gentle 3D perspective depth
+
+// Calculates the exact projected 2D screen coordinates relative to board center
+export function projectBoardPointToScreen(
+  boardX: number,
+  boardY: number,
+  boardSize = BOARD_SIZE,
+  rotZDeg = BOARD_ROTATION_Z_DEG,
+  tiltXDeg = BOARD_TILT_X_DEG,
+  perspective = PERSPECTIVE_PX
+) {
+  // Center relative coords (origin at board center)
+  const u = boardX - boardSize / 2;
+  const v = boardY - boardSize / 2;
+
+  const theta = (rotZDeg * Math.PI) / 180;
+  const phi = (tiltXDeg * Math.PI) / 180;
+
+  // 1. Rotate around Z
+  const cosTheta = Math.cos(theta);
+  const sinTheta = Math.sin(theta);
+  const u1 = u * cosTheta - v * sinTheta;
+  const v1 = u * sinTheta + v * cosTheta;
+
+  // 2. Rotate around X (Tilt)
+  const cosPhi = Math.cos(phi);
+  const sinPhi = Math.sin(phi);
+  const xScreen = u1;
+  const yScreen = v1 * cosPhi;
+  const zDepth = v1 * sinPhi;
+
+  // CSS 3D perspective scaling factor
+  const pScale = perspective > 0 ? perspective / (perspective - zDepth) : 1;
+
+  return {
+    x: xScreen * pScale,
+    y: yScreen * pScale
+  };
+}
+
 export const GameBoard: React.FC<GameBoardProps> = ({
   gameState,
   selectedTileIndex,
@@ -94,6 +138,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
 
+  const hasDraggedRef = useRef(false);
   const pointerStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const dragOffsetStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const autoResetTimerRef = useRef<any>(null);
@@ -283,6 +328,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
   // Pointer Down handler
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
+    hasDraggedRef.current = false;
     pointerStartRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -298,7 +344,8 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     const dy = e.clientY - pointerStartRef.current.y;
     const dist = Math.hypot(dx, dy);
 
-    if (dist > 6) {
+    if (dist > 8) {
+      hasDraggedRef.current = true;
       if (!isDragging) {
         setIsDragging(true);
         setIsManualControl(true);
@@ -320,31 +367,28 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     pointerStartRef.current = null;
   };
 
-  // Compute camera translation & scale in 3D isometric view
-  const targetCoords = getTileCenterCoords(focusedTileIndex);
-  const boardCenter = BOARD_SIZE / 2; // 480px
+  // Calculate Camera Position in 2D Screen Space
+  const cameraScale = cameraMode === 'overview' ? 0.44 : 0.95;
+  const targetTileCoords = getTileCenterCoords(focusedTileIndex);
+  const targetProjected = projectBoardPointToScreen(targetTileCoords.x, targetTileCoords.y);
 
-  // Adjust for 3D perspective - account for rotation and scale
-  const perspectiveFactorX = 0.85; // X-axis perspective adjustment
-  const perspectiveFactorY = 0.75; // Y-axis perspective adjustment
-  const scaleFactor = cameraMode === 'overview' ? 0.42 : 1.0;
-  
-  // In follow mode: center on focused tile with perspective adjustment
+  // Optical vertical offset (-24px) so focused tile is positioned nicely above the bottom HUD
+  const VIEWPORT_OFFSET_Y = -24;
+
   const baseCameraX = cameraMode === 'overview'
     ? 0
-    : boardCenter - targetCoords.x * perspectiveFactorX * scaleFactor;
-    
+    : -targetProjected.x * cameraScale;
+
   const baseCameraY = cameraMode === 'overview'
     ? 0
-    : boardCenter - targetCoords.y * perspectiveFactorY * scaleFactor;
+    : -targetProjected.y * cameraScale + VIEWPORT_OFFSET_Y;
 
   const totalCameraX = isManualControl ? baseCameraX + dragOffset.x : baseCameraX;
   const totalCameraY = isManualControl ? baseCameraY + dragOffset.y : baseCameraY;
-  const cameraScale = scaleFactor;
 
   return (
     <div
-      className="relative w-full flex-1 flex items-center justify-center overflow-hidden select-none board-perspective cursor-grab active:cursor-grabbing touch-none"
+      className="relative w-full flex-1 flex items-center justify-center overflow-hidden select-none cursor-grab active:cursor-grabbing touch-none"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -422,13 +466,12 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         </div>
       )}
 
-      {/* 3D Isometric Square Board Container */}
+      {/* 2D Camera Layer: Handles clean 2D panning, zooming, and smooth tracking */}
       <div
-        className="relative board-isometric-3d rounded-[32px] overflow-hidden bg-slate-900 border-[6px] border-slate-800"
+        className="absolute inset-0 flex items-center justify-center pointer-events-none"
         style={{
-          width: `${BOARD_SIZE}px`,
-          height: `${BOARD_SIZE}px`,
-          transform: `rotateX(42deg) rotateZ(-36deg) scale(${cameraScale}) translate3d(${totalCameraX}px, ${totalCameraY}px, 0px)`,
+          transform: `translate3d(${totalCameraX}px, ${totalCameraY}px, 0px) scale(${cameraScale})`,
+          transformOrigin: '50% 50%',
           transition: isDragging
             ? 'none'
             : hoppingPlayerId
@@ -436,204 +479,154 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             : 'transform 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
         }}
       >
-        {/* Central Velvet Board Tray with 3D Monopoly Banner & Dice */}
-        <div className="absolute inset-[13.5%] rounded-[30px] bg-gradient-to-br from-emerald-800 via-emerald-900 to-teal-950 border-[5px] border-amber-600/70 flex flex-col items-center justify-center p-6 text-center shadow-[inset_0_10px_40px_rgba(0,0,0,0.8),0_12px_24px_rgba(0,0,0,0.5)] z-0 pointer-events-auto">
-          {/* Monopoly 3D Banner */}
-          <div className="px-8 py-2.5 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-red-700 border-2 border-white/80 shadow-[0_5px_0_#991b1b,0_10px_20px_rgba(0,0,0,0.5)] transform -rotate-1 mb-2">
-            <div className="text-2xl sm:text-3xl font-black tracking-widest text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] font-display">
-              MONOPOLY
-            </div>
-          </div>
-          <div className="text-[11px] text-emerald-200 font-extrabold uppercase tracking-widest drop-shadow">
-            Telegram Mini App Edition
-          </div>
-
-          {/* Central 3D Card Decks (Chance & Community Chest) */}
-          <div className="w-full flex items-center justify-around px-8 mt-3">
-            <div className="flex flex-col items-center">
-              <div className="w-20 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 border-2 border-white shadow-[0_4px_0_#b45309,0_8px_16px_rgba(0,0,0,0.4)] flex items-center justify-center text-white font-black text-xs sm:text-sm">
-                ❓ ШАНС
-              </div>
-            </div>
-
-            <div className="flex flex-col items-center">
-              <div className="w-20 h-12 rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 border-2 border-white shadow-[0_4px_0_#1d4ed8,0_8px_16px_rgba(0,0,0,0.4)] flex items-center justify-center text-white font-black text-xs sm:text-sm">
-                🎁 КАЗНА
-              </div>
-            </div>
-          </div>
-
-          {/* Central 3D Physical Dice Display */}
-          {gameState.lastDiceResult && (
-            <div className="mt-4 flex flex-col items-center gap-1.5 bg-slate-950/80 backdrop-blur-md px-6 py-2 rounded-2xl border-2 border-amber-400/40 shadow-2xl">
-              <div className="text-[10px] uppercase tracking-wider font-extrabold text-amber-300">
-                Результат броска
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-white text-slate-950 font-black text-2xl flex items-center justify-center shadow-[0_5px_0_#cbd5e1,0_8px_16px_rgba(0,0,0,0.4)] border-2 border-slate-100 transform hover:scale-110 transition">
-                  {gameState.lastDiceResult.die1}
-                </div>
-                <div className="w-11 h-11 rounded-2xl bg-white text-slate-950 font-black text-2xl flex items-center justify-center shadow-[0_5px_0_#cbd5e1,0_8px_16px_rgba(0,0,0,0.4)] border-2 border-slate-100 transform hover:scale-110 transition">
-                  {gameState.lastDiceResult.die2}
+        {/* 3D Perspective Viewport */}
+        <div
+          className="board-perspective"
+          style={{
+            perspective: `${PERSPECTIVE_PX}px`,
+            perspectiveOrigin: '50% 50%'
+          }}
+        >
+          {/* 3D Isometric Board Container */}
+          <div
+            className="relative board-isometric-3d rounded-[32px] overflow-hidden bg-slate-900 border-[6px] border-slate-800 pointer-events-auto"
+            style={{
+              width: `${BOARD_SIZE}px`,
+              height: `${BOARD_SIZE}px`,
+              transform: `rotateX(${BOARD_TILT_X_DEG}deg) rotateZ(${BOARD_ROTATION_Z_DEG}deg)`,
+              transformOrigin: '50% 50%'
+            }}
+          >
+            {/* Central Velvet Board Tray with 3D Monopoly Banner & Dice */}
+            <div className="absolute inset-[13.5%] rounded-[30px] bg-gradient-to-br from-emerald-800 via-emerald-900 to-teal-950 border-[5px] border-amber-600/70 flex flex-col items-center justify-center p-6 text-center shadow-[inset_0_10px_40px_rgba(0,0,0,0.8),0_12px_24px_rgba(0,0,0,0.5)] z-0 pointer-events-auto">
+              {/* Monopoly 3D Banner */}
+              <div className="px-8 py-2.5 rounded-2xl bg-gradient-to-r from-red-600 via-rose-500 to-red-700 border-2 border-white/80 shadow-[0_5px_0_#991b1b,0_10px_20px_rgba(0,0,0,0.5)] transform -rotate-1 mb-2">
+                <div className="text-2xl sm:text-3xl font-black tracking-widest text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] font-display">
+                  MONOPOLY
                 </div>
               </div>
-              {gameState.lastDiceResult.isDouble && (
-                <span className="text-[11px] font-black text-amber-300 bg-amber-500/30 px-3 py-0.5 rounded-full border border-amber-300 shadow animate-pulse">
-                  ✨ ДУБЛЬ! ✨
-                </span>
+              <div className="text-[11px] text-emerald-200 font-extrabold uppercase tracking-widest drop-shadow">
+                Telegram Mini App Edition
+              </div>
+
+              {/* Central 3D Card Decks (Chance & Community Chest) */}
+              <div className="w-full flex items-center justify-around px-8 mt-3">
+                <div className="flex flex-col items-center">
+                  <div className="w-20 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 border-2 border-white shadow-[0_4px_0_#b45309,0_8px_16px_rgba(0,0,0,0.4)] flex items-center justify-center text-white font-black text-xs sm:text-sm">
+                    ❓ ШАНС
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-center">
+                  <div className="w-20 h-12 rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 border-2 border-white shadow-[0_4px_0_#1d4ed8,0_8px_16px_rgba(0,0,0,0.4)] flex items-center justify-center text-white font-black text-xs sm:text-sm">
+                    🎁 КАЗНА
+                  </div>
+                </div>
+              </div>
+
+              {/* Central 3D Physical Dice Display */}
+              {gameState.lastDiceResult && (
+                <div className="mt-4 flex flex-col items-center gap-1.5 bg-slate-950/80 backdrop-blur-md px-6 py-2 rounded-2xl border-2 border-amber-400/40 shadow-2xl">
+                  <div className="text-[10px] uppercase tracking-wider font-extrabold text-amber-300">
+                    Результат броска
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-white text-slate-950 font-black text-2xl flex items-center justify-center shadow-[0_5px_0_#cbd5e1,0_8px_16px_rgba(0,0,0,0.4)] border-2 border-slate-100 transform hover:scale-110 transition">
+                      {gameState.lastDiceResult.die1}
+                    </div>
+                    <div className="w-11 h-11 rounded-2xl bg-white text-slate-950 font-black text-2xl flex items-center justify-center shadow-[0_5px_0_#cbd5e1,0_8px_16px_rgba(0,0,0,0.4)] border-2 border-slate-100 transform hover:scale-110 transition">
+                      {gameState.lastDiceResult.die2}
+                    </div>
+                  </div>
+                  {gameState.lastDiceResult.isDouble && (
+                    <span className="text-[11px] font-black text-amber-300 bg-amber-500/30 px-3 py-0.5 rounded-full border border-amber-300 shadow animate-pulse">
+                      ✨ ДУБЛЬ! ✨
+                    </span>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
 
-        {/* 11x11 Grid of Large, Chunky, High-Readability 3D Tiles */}
-        <div className="grid grid-cols-11 grid-rows-11 w-full h-full gap-1 p-2.5 relative z-10">
-          {BOARD_TILES.map((tile) => {
-            const coords = getTileCenterCoords(tile.index);
-            const isSelected = selectedTileIndex === tile.index;
-            const propState = gameState.propertyStates[tile.index];
-            const owner = gameState.players.find((p) => p.properties.includes(tile.index));
-            const isCorner = tile.index % 10 === 0;
-            const groupTheme = GROUP_COLORS[tile.group] || GROUP_COLORS.special;
+            {/* 11x11 Grid of Large, Chunky, High-Readability 3D Tiles */}
+            <div className="grid grid-cols-11 grid-rows-11 w-full h-full gap-1 p-2.5 relative z-10">
+              {BOARD_TILES.map((tile) => {
+                const coords = getTileCenterCoords(tile.index);
+                const isSelected = selectedTileIndex === tile.index;
+                const propState = gameState.propertyStates[tile.index];
+                const owner = gameState.players.find((p) => p.properties.includes(tile.index));
 
-            // Find all players currently on this tile (using animated position)
-            const playersHere = gameState.players.filter(
-              (p) => (animatedPositions[p.id] ?? p.position) === tile.index && !p.isBankrupt
-            );
+                // Find all players currently on this tile (using animated position)
+                const playersHere = gameState.players.filter(
+                  (p) => (animatedPositions[p.id] ?? p.position) === tile.index && !p.isBankrupt
+                );
 
-            return (
-              <div
-                key={tile.index}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  triggerHaptic('light');
-                  onSelectTile(tile.index);
-                }}
-                style={{
-                  gridRow: coords.row + 1,
-                  gridColumn: coords.col + 1
-                }}
-                className={`relative flex flex-col justify-between cursor-pointer select-none transition-all duration-200 tile-3d-card ${
-                  isSelected ? 'tile-3d-card-selected' : ''
-                } ${
-                  isCorner
-                    ? 'p-1.5 bg-gradient-to-br from-slate-100 via-indigo-50 to-amber-50 border-2 border-indigo-300'
-                    : 'p-1 bg-white'
-                }`}
-              >
-                {/* Colored Top Header Strip for Street Properties */}
-                {tile.type === 'street' && (
+                return (
                   <div
-                    className={`h-5.5 w-full rounded-t-lg flex items-center justify-between px-1.5 ${groupTheme.header} shadow-sm`}
+                    key={tile.index}
+                    style={{
+                      gridRow: coords.row + 1,
+                      gridColumn: coords.col + 1
+                    }}
+                    className="relative w-full h-full"
                   >
-                    {/* Owner indicator dot inside header */}
-                    {owner ? (
-                      <div
-                        className="w-3.5 h-3.5 rounded-full border-2 border-white shadow-md animate-pulse"
-                        style={{ backgroundColor: owner.color }}
-                        title={`Владелец: ${owner.displayName}`}
-                      />
-                    ) : (
-                      <div className="w-2 h-2 rounded-full bg-white/70" />
-                    )}
-                  </div>
-                )}
+                    <PropertyCard
+                      tile={tile}
+                      owner={owner}
+                      level={propState?.level || 0}
+                      isMortgaged={propState?.isMortgaged || false}
+                      isSelected={isSelected}
+                      variant="tile"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (hasDraggedRef.current) return;
+                        triggerHaptic('light');
+                        onSelectTile(tile.index);
+                      }}
+                    />
 
-                {/* Owner color banner on non-street properties */}
-                {tile.type !== 'street' && owner && (
-                  <div
-                    className="absolute top-1 right-1 w-4 h-4 rounded-full border-2 border-white shadow-md z-10"
-                    style={{ backgroundColor: owner.color }}
-                  />
-                )}
-
-                {/* Tile Center Body: Larger icons, full text & readable bold prices */}
-                <div className="flex-1 flex flex-col items-center justify-center text-center p-0.5 overflow-hidden">
-                  <span className="text-2xl leading-none filter drop-shadow">
-                    {tile.icon || '🏷️'}
-                  </span>
-                  <span className="text-[11px] leading-[1.15] font-black text-slate-900 line-clamp-2 w-full px-0.5 mt-0.5 tracking-tight">
-                    {tile.name}
-                  </span>
-                  {tile.cost && (
-                    <span className="text-[11px] font-black text-amber-800 bg-amber-100/90 px-1.5 py-0.5 rounded-md mt-0.5">
-                      ${tile.cost}
-                    </span>
-                  )}
-                  {tile.type === 'go' && (
-                    <span className="text-[11px] font-black text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md mt-0.5">
-                      +$200
-                    </span>
-                  )}
-                  {tile.type === 'tax' && tile.taxAmount && (
-                    <span className="text-[11px] font-black text-red-600 bg-red-100 px-1.5 py-0.5 rounded-md mt-0.5">
-                      -${tile.taxAmount}
-                    </span>
-                  )}
-                </div>
-
-                {/* Property Upgrades Indicator (Houses / Hotel) */}
-                {propState && propState.level > 0 && (
-                  <div className="w-full flex justify-center items-center gap-0.5 py-0.5 bg-slate-100 rounded-b-lg border-t border-slate-300">
-                    {propState.level === 5 ? (
-                      <span className="text-[11px] font-black text-red-600 animate-bounce">
-                        🏨 Отель
-                      </span>
-                    ) : (
-                      <div className="flex items-center gap-0.5">
-                        {Array.from({ length: propState.level }).map((_, i) => (
-                          <div
-                            key={i}
-                            className="w-3.5 h-3.5 rounded-xs bg-emerald-500 border border-emerald-300 shadow-sm"
-                            title="Филиал"
-                          />
-                        ))}
+                    {/* Player Pawns / Hopping Tokens */}
+                    {playersHere.length > 0 && (
+                      <div className="absolute inset-0 flex items-center justify-center gap-1 pointer-events-none z-30">
+                        {playersHere.map((p) => {
+                          const isCurrentlyHopping = hoppingPlayerId === p.id;
+                          const isLanding = landingPlayerId === p.id;
+                          return (
+                            <div
+                              key={p.id}
+                              className="relative flex flex-col items-center justify-center"
+                            >
+                              {/* 3D Pawn Shadow */}
+                              <div
+                                className={`w-8 h-3.5 rounded-full bg-slate-950/75 blur-[1px] absolute -bottom-2 ${
+                                  isCurrentlyHopping ? 'animate-pawn-shadow-pulse' : ''
+                                }`}
+                              />
+                              {/* 3D Pawn Figurine */}
+                              <div
+                                className={`w-9 h-9 rounded-full border-2 border-white shadow-2xl flex items-center justify-center text-xs font-black text-white ${
+                                  isCurrentlyHopping
+                                    ? 'animate-pawn-hop-arc'
+                                    : isLanding
+                                    ? 'animate-pawn-land-squish'
+                                    : ''
+                                }`}
+                                style={{
+                                  backgroundColor: p.color,
+                                  boxShadow: `0 6px 14px ${p.color}aa, inset 0 2px 4px rgba(255,255,255,0.9)`
+                                }}
+                              >
+                                {p.displayName.slice(0, 1).toUpperCase()}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
-                )}
-
-                {/* Player Pawns / Hopping Tokens */}
-                {playersHere.length > 0 && (
-                  <div className="absolute inset-0 flex items-center justify-center gap-1 pointer-events-none z-30">
-                    {playersHere.map((p) => {
-                      const isCurrentlyHopping = hoppingPlayerId === p.id;
-                      const isLanding = landingPlayerId === p.id;
-                      return (
-                        <div
-                          key={p.id}
-                          className="relative flex flex-col items-center justify-center"
-                        >
-                          {/* 3D Pawn Shadow */}
-                          <div
-                            className={`w-8 h-3.5 rounded-full bg-slate-950/75 blur-[1px] absolute -bottom-2 ${
-                              isCurrentlyHopping ? 'animate-pawn-shadow-pulse' : ''
-                            }`}
-                          />
-                          {/* 3D Pawn Figurine */}
-                          <div
-                            className={`w-9 h-9 rounded-full border-2 border-white shadow-2xl flex items-center justify-center text-xs font-black text-white ${
-                              isCurrentlyHopping
-                                ? 'animate-pawn-hop-arc'
-                                : isLanding
-                                ? 'animate-pawn-land-squish'
-                                : ''
-                            }`}
-                            style={{
-                              backgroundColor: p.color,
-                              boxShadow: `0 6px 14px ${p.color}aa, inset 0 2px 4px rgba(255,255,255,0.9)`
-                            }}
-                          >
-                            {p.displayName.slice(0, 1).toUpperCase()}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>
