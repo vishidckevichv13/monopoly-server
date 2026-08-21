@@ -86,11 +86,22 @@ export const GameBoard: React.FC<GameBoardProps> = ({
     return init;
   });
 
+  const animatedPositionsRef = useRef<Record<string, number>>({});
+  const hopStateRef = useRef<{ playerId: string; targetPos: number } | null>(null);
+
+  // Initial sync of ref
+  useEffect(() => {
+    gameState.players.forEach((p) => {
+      if (animatedPositionsRef.current[p.id] === undefined) {
+        animatedPositionsRef.current[p.id] = p.position;
+      }
+    });
+  }, []);
+
   // Track hopping token and landing token
   const [hoppingPlayerId, setHoppingPlayerId] = useState<string | null>(null);
   const [landingPlayerId, setLandingPlayerId] = useState<string | null>(null);
 
-  const prevPlayersRef = useRef<PlayerState[]>(gameState.players);
   const prevDiceRef = useRef(gameState.lastDiceResult);
   const prevTurnRef = useRef(gameState.turnNumber);
   const prevActivePlayerRef = useRef(gameState.activePlayerIndex);
@@ -169,21 +180,47 @@ export const GameBoard: React.FC<GameBoardProps> = ({
 
   // Step-by-step token hopping animation and synchronized camera tracking
   useEffect(() => {
-    const prevPlayers = prevPlayersRef.current;
-    prevPlayersRef.current = gameState.players;
-
-    // Check if active player or another player changed positions
+    // Check if any player's server position differs from their tracked animated position
     const movingPlayer = gameState.players.find((player) => {
-      const prev = prevPlayers.find((p) => p.id === player.id);
-      const currentPos = animatedPositions[player.id] ?? player.position;
-      return prev && prev.position !== player.position && currentPos !== player.position;
+      const currentPos = animatedPositionsRef.current[player.id] ?? player.position;
+      return currentPos !== player.position;
     });
 
     if (movingPlayer) {
-      const currentPos = animatedPositions[movingPlayer.id] ?? movingPlayer.position;
+      const currentPos = animatedPositionsRef.current[movingPlayer.id] ?? movingPlayer.position;
       const targetPos = movingPlayer.position;
 
-      // Calculate clockwise step-by-step path
+      // If already hopping to this exact target position, do not interrupt the animation!
+      if (
+        hopStateRef.current &&
+        hopStateRef.current.playerId === movingPlayer.id &&
+        hopStateRef.current.targetPos === targetPos
+      ) {
+        return;
+      }
+
+      // Calculate forward distance
+      const distance = (targetPos - currentPos + 40) % 40;
+
+      // Direct teleport for Jail (e.g. Go To Jail) or long jumps (> 12 tiles)
+      const isTeleport = distance > 12 || (movingPlayer.inJail && targetPos === 10);
+
+      if (isTeleport) {
+        if (hopIntervalRef.current) {
+          clearInterval(hopIntervalRef.current);
+          hopIntervalRef.current = null;
+        }
+        hopStateRef.current = null;
+        setHoppingPlayerId(null);
+        animatedPositionsRef.current[movingPlayer.id] = targetPos;
+        setAnimatedPositions((prev) => ({ ...prev, [movingPlayer.id]: targetPos }));
+        setLandingPlayerId(movingPlayer.id);
+        triggerHaptic('heavy');
+        setTimeout(() => setLandingPlayerId(null), 400);
+        return;
+      }
+
+      // Calculate step-by-step clockwise path
       const steps: number[] = [];
       let stepPos = currentPos;
       while (stepPos !== targetPos) {
@@ -194,6 +231,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
       if (steps.length > 0) {
         if (hopIntervalRef.current) clearInterval(hopIntervalRef.current);
 
+        hopStateRef.current = { playerId: movingPlayer.id, targetPos };
         setHoppingPlayerId(movingPlayer.id);
         setIsManualControl(false);
         setDragOffset({ x: 0, y: 0 });
@@ -203,6 +241,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
         hopIntervalRef.current = setInterval(() => {
           if (currentStepIdx < steps.length) {
             const nextTile = steps[currentStepIdx];
+            animatedPositionsRef.current[movingPlayer.id] = nextTile;
             setAnimatedPositions((prevMap) => ({
               ...prevMap,
               [movingPlayer.id]: nextTile
@@ -220,34 +259,34 @@ export const GameBoard: React.FC<GameBoardProps> = ({
           } else {
             clearInterval(hopIntervalRef.current);
             hopIntervalRef.current = null;
+            hopStateRef.current = null;
+            animatedPositionsRef.current[movingPlayer.id] = targetPos;
+            setAnimatedPositions((prev) => ({ ...prev, [movingPlayer.id]: targetPos }));
             setHoppingPlayerId(null);
             setLandingPlayerId(movingPlayer.id);
             triggerHaptic('heavy');
             setTimeout(() => setLandingPlayerId(null), 350);
           }
-        }, 160); // Snappy, smooth 160ms per step
+        }, 140);
       }
     } else {
-      // Sync any static player positions
-      setAnimatedPositions((prevMap) => {
-        let changed = false;
-        const newMap = { ...prevMap };
-        gameState.players.forEach((p) => {
-          if (newMap[p.id] !== p.position && hoppingPlayerId !== p.id) {
-            newMap[p.id] = p.position;
-            changed = true;
-          }
-        });
-        return changed ? newMap : prevMap;
-      });
-    }
+      // Sync any static player positions to eliminate drift
+      const currentHoppingId = hopStateRef.current?.playerId;
+      let changed = false;
+      const newMap = { ...animatedPositionsRef.current };
 
-    return () => {
-      if (hopIntervalRef.current) {
-        clearInterval(hopIntervalRef.current);
-        hopIntervalRef.current = null;
+      gameState.players.forEach((p) => {
+        if (currentHoppingId !== p.id && newMap[p.id] !== p.position) {
+          newMap[p.id] = p.position;
+          animatedPositionsRef.current[p.id] = p.position;
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        setAnimatedPositions({ ...newMap });
       }
-    };
+    }
   }, [gameState.players]);
 
   // Clean up timers on unmount
@@ -530,7 +569,7 @@ export const GameBoard: React.FC<GameBoardProps> = ({
             )}
           </div>
 
-          {/* 11x11 Grid: Square corner tiles + Rectangular portrait street tiles */}
+          {/* 11x11 Grid: Square corner tiles + Rectantic portrait street tiles */}
           <div className="grid grid-cols-[1.35fr_repeat(9,1fr)_1.35fr] grid-rows-[1.35fr_repeat(9,1fr)_1.35fr] w-full h-full gap-1 p-2.5 relative z-10">
             {BOARD_TILES.map((tile) => {
               const coords = getTileCenterCoords(tile.index);

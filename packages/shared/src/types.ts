@@ -62,6 +62,10 @@ export interface PlayerState {
   isBot: boolean;
   doublesRolledCount: number;
   properties: number[]; // tile indices owned
+  elo?: number;
+  level?: number;
+  isReady?: boolean;
+  isSpectator?: boolean;
 }
 
 export type TurnPhase =
@@ -119,6 +123,7 @@ export interface GameState {
   logs: GameLogEntry[];
   jackpot: number;
   auctionState: AuctionState | null;
+  auctionDoneForTurn?: boolean;
   activeTrade: TradeOffer | null;
 }
 
@@ -133,10 +138,27 @@ export interface RoomSettings {
 export interface RoomSummary {
   id: string;
   name: string;
+  hostDisplayName: string;
   playerCount: number;
   maxPlayers: number;
   isGameStarted: boolean;
   isPrivate: boolean;
+  isSearching: boolean;
+  createdAt: number;
+}
+
+export interface RoomState {
+  id: string;
+  name: string;
+  hostId: string;
+  isPrivate: boolean;
+  maxPlayers: number;
+  players: PlayerState[];
+  isStarted: boolean;
+  isSearching: boolean;
+  searchTimeRemaining?: number;
+  searchElapsedSeconds?: number;
+  autoStartCountdown?: number | null;
 }
 
 export interface TimerTickPayload {

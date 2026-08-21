@@ -99,6 +99,29 @@ export function triggerHapticNotification(type: 'error' | 'success' | 'warning' 
 }
 
 export function getCurrentUser() {
+  let savedElo = 1000;
+  try {
+    const eloStr = localStorage.getItem('mono_user_elo');
+    if (eloStr) {
+      const parsed = parseInt(eloStr, 10);
+      if (!isNaN(parsed) && parsed > 0) savedElo = parsed;
+    }
+  } catch {
+    // Ignore localStorage read issue
+  }
+
+  let level = 3;
+  if (savedElo < 750) level = 1;
+  else if (savedElo <= 900) level = 2;
+  else if (savedElo <= 1050) level = 3;
+  else if (savedElo <= 1200) level = 4;
+  else if (savedElo <= 1350) level = 5;
+  else if (savedElo <= 1500) level = 6;
+  else if (savedElo <= 1700) level = 7;
+  else if (savedElo <= 1900) level = 8;
+  else if (savedElo <= 2100) level = 9;
+  else level = 10;
+
   const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
   if (tgUser) {
     return {
@@ -106,7 +129,9 @@ export function getCurrentUser() {
       telegramId: tgUser.id,
       username: tgUser.username || `user_${tgUser.id}`,
       displayName: [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') || `Игрок ${tgUser.id}`,
-      avatarUrl: tgUser.photo_url || ''
+      avatarUrl: tgUser.photo_url || '',
+      elo: savedElo,
+      level
     };
   }
 
@@ -118,6 +143,8 @@ export function getCurrentUser() {
     id: localId,
     username: localId,
     displayName: `Игрок #${localId.slice(-4)}`,
-    avatarUrl: ''
+    avatarUrl: '',
+    elo: savedElo,
+    level
   };
 }

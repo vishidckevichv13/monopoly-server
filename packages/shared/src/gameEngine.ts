@@ -59,6 +59,7 @@ export function createInitialGameState(
     ],
     jackpot: 100,
     auctionState: null,
+    auctionDoneForTurn: false,
     activeTrade: null
   };
 }
@@ -154,9 +155,37 @@ export function calculateRent(
   return 0;
 }
 
+export function processPlayerBankruptcy(state: GameState, playerId: string, reasonMessage?: string): GameState {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || player.isBankrupt) return state;
+
+  const updatedPropertyStates = { ...state.propertyStates };
+  player.properties.forEach((propIdx) => {
+    delete updatedPropertyStates[propIdx];
+  });
+
+  const updatedPlayers = state.players.map((p) =>
+    p.id === playerId ? { ...p, isBankrupt: true, properties: [] } : p
+  );
+
+  const logs = [...state.logs];
+  if (reasonMessage) {
+    logs.push(makeLog(reasonMessage, 'bankrupt', player.id));
+  }
+
+  const nextState: GameState = {
+    ...state,
+    players: updatedPlayers,
+    propertyStates: updatedPropertyStates,
+    logs
+  };
+
+  return checkBankruptcyAndWinner(nextState);
+}
+
 export function checkBankruptcyAndWinner(state: GameState): GameState {
-  const activePlayers = state.players.filter((p) => !p.isBankrupt);
-  if (activePlayers.length <= 1) {
+  const activePlayers = state.players.filter((p) => !p.isBankrupt && !p.isSpectator);
+  if (activePlayers.length <= 1 && state.players.length > 0) {
     const winner = activePlayers[0] || state.players[0];
     return {
       ...state,
@@ -176,9 +205,15 @@ export function handleTileLanding(
   playerIndex: number,
   diceTotal: number
 ): GameState {
-  const player = state.players[playerIndex];
+  const players = state.players.map((p) => ({ ...p, properties: [...p.properties] }));
+  const player = players[playerIndex];
   const tile = BOARD_TILES[player.position];
-  let updatedState = { ...state };
+  let updatedState: GameState = {
+    ...state,
+    players,
+    propertyStates: { ...state.propertyStates },
+    logs: [...state.logs]
+  };
 
   if (tile.type === 'go') {
     updatedState.turnPhase = 'AWAITING_ACTION';
@@ -206,9 +241,10 @@ export function handleTileLanding(
     );
 
     if (player.balance < 0) {
-      player.isBankrupt = true;
-      updatedState.logs.push(
-        makeLog(`${player.displayName} обанкротился на налогах! 💀`, 'bankrupt', player.id)
+      updatedState = processPlayerBankruptcy(
+        updatedState,
+        player.id,
+        `${player.displayName} обанкротился на налогах! Вся недвижимость возвращена банку 💀🏦`
       );
     }
     updatedState.turnPhase = 'AWAITING_ACTION';
@@ -238,9 +274,10 @@ export function handleTileLanding(
     updatedState.logs.push(makeLog(msg, picked >= 0 ? 'bonus' : 'tax', player.id));
 
     if (player.balance < 0) {
-      player.isBankrupt = true;
-      updatedState.logs.push(
-        makeLog(`${player.displayName} обанкротился! 💀`, 'bankrupt', player.id)
+      updatedState = processPlayerBankruptcy(
+        updatedState,
+        player.id,
+        `${player.displayName} обанкротился! Вся недвижимость возвращена банку 💀🏦`
       );
     }
     updatedState.turnPhase = 'AWAITING_ACTION';
@@ -278,11 +315,10 @@ export function handleTileLanding(
           );
 
           if (player.balance < 0) {
-            player.isBankrupt = true;
-            owner.properties.push(...player.properties);
-            player.properties = [];
-            updatedState.logs.push(
-              makeLog(`${player.displayName} обанкротился и отдал всё имущество ${owner.displayName}! 💀`, 'bankrupt', player.id)
+            updatedState = processPlayerBankruptcy(
+              updatedState,
+              player.id,
+              `${player.displayName} обанкротился на аренде! Вся недвижимость возвращена банку 💀🏦`
             );
           }
         }
@@ -317,6 +353,7 @@ export function executeRollDice(state: GameState, playerId: string): GameState {
     turnTimeRemaining: GAME_RULES.TURN_TIMEOUT_SECONDS,
     players: updatedPlayers,
     lastDiceResult: dice,
+    auctionDoneForTurn: false,
     logs: [
       ...state.logs,
       makeLog(
@@ -342,6 +379,15 @@ export function executeRollDice(state: GameState, playerId: string): GameState {
         updatedState.logs.push(
           makeLog(`${player.displayName} отбыл срок, оплатил штраф $${GAME_RULES.JAIL_FINE}M и вышел на свободу.`, 'jail', player.id)
         );
+        if (player.balance < 0) {
+          updatedState = processPlayerBankruptcy(
+            updatedState,
+            player.id,
+            `${player.displayName} обанкротился на штрафе за выход из тюрьмы! Вся недвижимость возвращена банку 💀🏦`
+          );
+          updatedState.turnPhase = 'AWAITING_ACTION';
+          return checkBankruptcyAndWinner(updatedState);
+        }
       } else {
         updatedState.logs.push(
           makeLog(`${player.displayName} остается в тюрьме (попыток осталось: ${player.jailTurns})`, 'jail', player.id)
@@ -424,6 +470,7 @@ export function executeBuyProperty(
 
   return {
     ...state,
+    auctionDoneForTurn: true,
     players: updatedPlayers,
     propertyStates: updatedPropertyStates,
     logs: [
@@ -457,7 +504,7 @@ export function executeStartAuction(
   }
 
   const startPrice = calculateAuctionStartPrice(tile.cost);
-  const eligiblePlayers = state.players.filter((p) => !p.isBankrupt).map((p) => p.id);
+  const eligiblePlayers = state.players.filter((p) => !p.isBankrupt && !p.isSpectator).map((p) => p.id);
 
   const auctionState: AuctionState = {
     tileIndex,
@@ -471,6 +518,7 @@ export function executeStartAuction(
     ...state,
     turnPhase: 'AUCTION',
     auctionState,
+    auctionDoneForTurn: true,
     logs: [
       ...state.logs,
       makeLog(
@@ -591,6 +639,7 @@ export function executeEndAuction(state: GameState): GameState {
     turnPhase: 'AWAITING_ACTION',
     turnTimeRemaining: GAME_RULES.TURN_TIMEOUT_SECONDS,
     auctionState: null,
+    auctionDoneForTurn: true,
     logs: [
       ...state.logs,
       makeLog(logMsg, 'auction', highestBidderId || undefined)
@@ -938,30 +987,17 @@ export function executeSurrender(state: GameState, playerId: string): GameState 
   const player = state.players.find((p) => p.id === playerId);
   if (!player || player.isBankrupt) return state;
 
-  const updatedPlayers = state.players.map((p) =>
-    p.id === playerId ? { ...p, isBankrupt: true, properties: [] } : p
+  let nextState = processPlayerBankruptcy(
+    state,
+    playerId,
+    `${player.displayName} сдался и покинул игру 🏳️ (недвижимость возвращена банку)`
   );
 
-  const updatedPropertyStates = { ...state.propertyStates };
-  player.properties.forEach((propIdx) => {
-    delete updatedPropertyStates[propIdx];
-  });
-
-  let nextState: GameState = {
-    ...state,
-    players: updatedPlayers,
-    propertyStates: updatedPropertyStates,
-    logs: [
-      ...state.logs,
-      makeLog(`${player.displayName} сдался и покинул игру 🏳️`, 'bankrupt', player.id)
-    ]
-  };
-
   if (state.players[state.activePlayerIndex]?.id === playerId) {
-    let nextIndex = (state.activePlayerIndex + 1) % updatedPlayers.length;
+    let nextIndex = (state.activePlayerIndex + 1) % nextState.players.length;
     let attempts = 0;
-    while (updatedPlayers[nextIndex].isBankrupt && attempts < updatedPlayers.length) {
-      nextIndex = (nextIndex + 1) % updatedPlayers.length;
+    while (nextState.players[nextIndex].isBankrupt && attempts < nextState.players.length) {
+      nextIndex = (nextIndex + 1) % nextState.players.length;
       attempts++;
     }
     nextState.activePlayerIndex = nextIndex;
@@ -981,7 +1017,7 @@ export function executeEndTurn(state: GameState, playerId: string): GameState {
 
   let nextIndex = (state.activePlayerIndex + 1) % state.players.length;
   let attempts = 0;
-  while (state.players[nextIndex].isBankrupt && attempts < state.players.length) {
+  while ((state.players[nextIndex].isBankrupt || state.players[nextIndex].isSpectator) && attempts < state.players.length) {
     nextIndex = (nextIndex + 1) % state.players.length;
     attempts++;
   }
@@ -996,6 +1032,7 @@ export function executeEndTurn(state: GameState, playerId: string): GameState {
     turnTimeRemaining: GAME_RULES.TURN_TIMEOUT_SECONDS,
     lastDiceResult: null,
     activeTrade: null,
+    auctionDoneForTurn: false,
     logs: [
       ...state.logs,
       makeLog(`Ход переходит к игроку ${nextPlayer.displayName} 🎯`, 'info', nextPlayer.id)
