@@ -10,7 +10,46 @@ import { TradeModal } from './components/TradeModal.js';
 import { LobbyView } from './components/LobbyView.js';
 import confetti from 'canvas-confetti';
 import { Trophy, RefreshCw, ArrowUpRight, TrendingDown, Crown, Eye } from 'lucide-react';
-import { recordMatchResult, getUserRating, getRankTier } from './utils/ratingSystem.js';
+import { recordMatchResult } from './utils/ratingSystem.js';
+
+const ACTIVE_SESSION_KEY = 'mono_active_session_v1';
+
+function saveActiveSession(roomId: string, roomName: string) {
+  try {
+    localStorage.setItem(
+      ACTIVE_SESSION_KEY,
+      JSON.stringify({
+        roomId,
+        roomName,
+        timestamp: Date.now()
+      })
+    );
+  } catch (e) {
+    console.warn('[Session] Failed to save active session to localStorage:', e);
+  }
+}
+
+function clearActiveSession() {
+  try {
+    localStorage.removeItem(ACTIVE_SESSION_KEY);
+  } catch (e) {
+    console.warn('[Session] Failed to clear active session from localStorage:', e);
+  }
+}
+
+function getCachedActiveSession(): { roomId: string; roomName: string } | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.roomId && Date.now() - (parsed.timestamp || 0) < 3 * 60 * 60 * 1000) {
+      return { roomId: parsed.roomId, roomName: parsed.roomName || `Комната #${parsed.roomId}` };
+    }
+  } catch (e) {
+    console.warn('[Session] Failed to read active session from localStorage:', e);
+  }
+  return null;
+}
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<PlayerState>(() => {
@@ -52,9 +91,10 @@ export const App: React.FC = () => {
   } | null>(null);
 
   const [publicRooms, setPublicRooms] = useState<any[]>([]);
-
   const [gameState, setGameState] = useState<GameState | null>(null);
-  const [activeGameRoom, setActiveGameRoom] = useState<{ roomId: string; roomName: string } | null>(null);
+  const [activeGameRoom, setActiveGameRoom] = useState<{ roomId: string; roomName: string } | null>(() => {
+    return getCachedActiveSession();
+  });
   const [selectedTileIndex, setSelectedTileIndex] = useState<number | null>(null);
   const [isTradeModalOpen, setIsTradeModalOpen] = useState<boolean>(false);
   const [matchSummary, setMatchSummary] = useState<ReturnType<typeof recordMatchResult> | null>(null);
@@ -65,14 +105,19 @@ export const App: React.FC = () => {
   useEffect(() => {
     initTelegramApp();
 
-    socket.on('connect', () => {
-      console.log('Connected to game server');
-
-      // Check active game for reconnect
+    const requestActiveSessionCheck = () => {
+      const u = getCurrentUser();
+      const cached = getCachedActiveSession();
       socket.emit('check_active_game', {
-        playerId: currentUser.id,
-        telegramId: currentUser.telegramId
+        playerId: u.id,
+        telegramId: u.telegramId,
+        cachedRoomId: cached?.roomId
       });
+    };
+
+    const handleConnect = () => {
+      console.log('[Socket] Connected to game server');
+      requestActiveSessionCheck();
 
       // Check for deep link / Telegram start_param to auto-join lobby
       try {
@@ -83,7 +128,7 @@ export const App: React.FC = () => {
         const roomToJoin = startParam || urlParam;
 
         if (roomToJoin && /^\d{6}$/.test(roomToJoin)) {
-          console.log(`Auto-joining room via invite deep-link: ${roomToJoin}`);
+          console.log(`[DeepLink] Auto-joining room via invite: ${roomToJoin}`);
           socket.emit('join_room', {
             roomId: roomToJoin,
             player: currentUser,
@@ -91,20 +136,40 @@ export const App: React.FC = () => {
           });
         }
       } catch (err) {
-        console.warn('Deep link auto-join error:', err);
+        console.warn('[DeepLink] Deep link auto-join error:', err);
       }
-    });
+    };
+
+    socket.on('connect', handleConnect);
+    if (socket.connected) {
+      handleConnect();
+    }
+
+    // When app regains visibility (e.g. user resumes Telegram), re-check active session
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (socket.connected) {
+          requestActiveSessionCheck();
+        } else {
+          socket.connect();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     socket.on('active_game_found', (data: { roomId: string; roomName: string }) => {
+      console.log('[Session] Active match detected:', data);
       setActiveGameRoom(data);
+      saveActiveSession(data.roomId, data.roomName);
     });
 
     socket.on('no_active_game', () => {
       setActiveGameRoom(null);
+      clearActiveSession();
     });
 
     socket.on('room_created', (data: { roomId: string }) => {
-      console.log('Room created:', data.roomId);
+      console.log('[Room] Created:', data.roomId);
     });
 
     socket.on('room_list', (rooms: any[]) => {
@@ -113,6 +178,9 @@ export const App: React.FC = () => {
 
     socket.on('room_updated', (data: any) => {
       setCurrentRoom(data);
+      if (data && data.isStarted) {
+        saveActiveSession(data.id, data.name);
+      }
     });
 
     socket.on('game_state', (state: GameState) => {
@@ -127,31 +195,39 @@ export const App: React.FC = () => {
       }
 
       setGameState(state);
+      if (state.roomId) {
+        saveActiveSession(state.roomId, `Матч #${state.roomId}`);
+      }
 
       const isSpectator = state.players.find((p) => p.id === currentUser.id)?.isSpectator;
 
-      if (state.turnPhase === 'GAME_OVER' && state.winnerId && !matchResultRecordedRef.current && !isSpectator) {
-        matchResultRecordedRef.current = true;
-        const isWinner = state.winnerId === currentUser.id;
-        const bankruptCount = state.players.filter((p) => p.isBankrupt && p.id !== currentUser.id).length;
-        const summary = recordMatchResult(isWinner, bankruptCount);
-        setMatchSummary(summary);
+      if (state.turnPhase === 'GAME_OVER') {
+        clearActiveSession();
+        setActiveGameRoom(null);
 
-        setCurrentUser((prev) => ({
-          ...prev,
-          elo: summary.newElo,
-          level: summary.newTier.level
-        }));
+        if (state.winnerId && !matchResultRecordedRef.current && !isSpectator) {
+          matchResultRecordedRef.current = true;
+          const isWinner = state.winnerId === currentUser.id;
+          const bankruptCount = state.players.filter((p) => p.isBankrupt && p.id !== currentUser.id).length;
+          const summary = recordMatchResult(isWinner, bankruptCount);
+          setMatchSummary(summary);
 
-        if (isWinner) {
-          triggerHapticNotification('success');
-          confetti({
-            particleCount: 150,
-            spread: 80,
-            origin: { y: 0.55 }
-          });
-        } else {
-          triggerHapticNotification('warning');
+          setCurrentUser((prev) => ({
+            ...prev,
+            elo: summary.newElo,
+            level: summary.newTier.level
+          }));
+
+          if (isWinner) {
+            triggerHapticNotification('success');
+            confetti({
+              particleCount: 150,
+              spread: 80,
+              origin: { y: 0.55 }
+            });
+          } else {
+            triggerHapticNotification('warning');
+          }
         }
       }
     });
@@ -193,7 +269,10 @@ export const App: React.FC = () => {
     });
 
     return () => {
-      socket.off('connect');
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      socket.off('connect', handleConnect);
+      socket.off('active_game_found');
+      socket.off('no_active_game');
       socket.off('room_created');
       socket.off('room_list');
       socket.off('room_updated');
@@ -292,6 +371,7 @@ export const App: React.FC = () => {
         playerId: currentUser.id
       });
     }
+    clearActiveSession();
     setActiveGameRoom(null);
     setCurrentRoom(null);
     setGameState(null);
@@ -312,7 +392,7 @@ export const App: React.FC = () => {
   const isUserSpectator = currentRoom?.players.find((p) => p.id === currentUser.id)?.isSpectator;
 
   return (
-    <div className="flex flex-col h-full h-[100dvh] w-screen max-w-lg mx-auto bg-slate-950 overflow-hidden relative select-none font-sans">
+    <div className="flex flex-col h-full h-[var(--app-height,100dvh)] min-h-[var(--app-height,100dvh)] max-h-[var(--app-height,100dvh)] w-screen max-w-lg mx-auto bg-slate-950 overflow-hidden relative select-none font-sans">
       {!gameState ? (
         <LobbyView
           currentUser={currentUser}

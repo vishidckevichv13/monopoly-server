@@ -198,7 +198,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
     const searchSeconds = currentRoom.searchElapsedSeconds ?? 1;
 
     return (
-      <div className="flex-1 flex flex-col justify-between p-4 max-w-md mx-auto w-full relative overflow-y-auto">
+      <div className="flex-1 flex flex-col justify-between px-4 pt-[max(var(--safe-top),14px)] pb-[max(var(--safe-bottom),14px)] max-w-md mx-auto w-full relative overflow-y-auto">
         {/* Top Header & Back Button */}
         <div className="flex items-center justify-between gap-2 mb-3">
           <button
@@ -480,7 +480,7 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   // 2. MAIN LOBBY HUB (TABS: HOME / LEADERBOARD / STATS)
   // -------------------------------------------------------------
   return (
-    <div className="flex-1 flex flex-col justify-between p-4 max-w-md mx-auto w-full relative overflow-hidden">
+    <div className="flex-1 flex flex-col justify-between px-4 pt-[max(var(--safe-top),14px)] pb-[max(var(--safe-bottom),14px)] max-w-md mx-auto w-full relative overflow-hidden">
       {/* Top Profile Header HUD */}
       <div className="bg-slate-900/90 border-2 border-slate-800/90 rounded-3xl p-3.5 shadow-xl flex flex-col gap-2.5 mb-3">
         <div className="flex items-center justify-between gap-3">

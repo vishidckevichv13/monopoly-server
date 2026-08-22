@@ -323,11 +323,18 @@ export class RoomManager {
     if (!room) return null;
 
     const existingIdx = room.players.findIndex(
-      (p: PlayerState) => p.id === player.id || (player.telegramId && p.telegramId === player.telegramId)
+      (p: PlayerState) =>
+        p.id === player.id ||
+        (player.telegramId && p.telegramId && String(p.telegramId) === String(player.telegramId)) ||
+        (player.telegramId && p.id === `tg_${player.telegramId}`) ||
+        (p.telegramId && player.id === `tg_${p.telegramId}`) ||
+        (player.id && p.id && String(p.id) === String(player.id))
     );
+
     if (existingIdx >= 0) {
       const existingPlayer = room.players[existingIdx];
       room.sockets.set(existingPlayer.id, socketId);
+      room.sockets.set(player.id, socketId);
       if (autoReady) {
         room.players[existingIdx].isReady = true;
       }
@@ -701,11 +708,37 @@ export class RoomManager {
     return !room.sockets.has(player.id);
   }
 
-  public getActiveRoomForPlayer(playerId: string, telegramId?: number): ActiveRoom | undefined {
+  public getActiveRoomForPlayer(playerId: string, telegramId?: number, cachedRoomId?: string): ActiveRoom | undefined {
+    // 1. If client provided cachedRoomId, check it first
+    if (cachedRoomId && this.rooms.has(cachedRoomId)) {
+      const room = this.rooms.get(cachedRoomId);
+      if (room && room.gameState && room.gameState.turnPhase !== 'GAME_OVER') {
+        const isPlayerInRoom = room.players.some(
+          (p) =>
+            !p.isBankrupt &&
+            !p.isSpectator &&
+            (p.id === playerId ||
+              (telegramId && p.telegramId && String(p.telegramId) === String(telegramId)) ||
+              (telegramId && p.id === `tg_${telegramId}`) ||
+              (p.telegramId && playerId === `tg_${p.telegramId}`) ||
+              (playerId && p.id && String(p.id) === String(playerId)))
+        );
+        if (isPlayerInRoom) return room;
+      }
+    }
+
+    // 2. Search through all active rooms
     for (const room of this.rooms.values()) {
       if (room.gameState && room.gameState.turnPhase !== 'GAME_OVER') {
         const found = room.players.some(
-          (p) => !p.isBankrupt && !p.isSpectator && (p.id === playerId || (telegramId && p.telegramId === telegramId))
+          (p) =>
+            !p.isBankrupt &&
+            !p.isSpectator &&
+            (p.id === playerId ||
+              (telegramId && p.telegramId && String(p.telegramId) === String(telegramId)) ||
+              (telegramId && p.id === `tg_${telegramId}`) ||
+              (p.telegramId && playerId === `tg_${p.telegramId}`) ||
+              (playerId && p.id && String(p.id) === String(playerId)))
         );
         if (found) return room;
       }

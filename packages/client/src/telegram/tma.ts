@@ -19,10 +19,14 @@ declare global {
         disableVerticalSwipes?: () => void;
         enableVerticalSwipes?: () => void;
         isVerticalSwipesEnabled?: boolean;
+        viewportHeight?: number;
+        viewportStableHeight?: number;
+        isExpanded?: boolean;
         initData: string;
         initDataUnsafe: {
           user?: TelegramUser;
           start_param?: string;
+          bot_username?: string;
         };
         HapticFeedback: {
           impactOccurred: (style: 'light' | 'medium' | 'heavy' | 'rigid' | 'soft') => void;
@@ -44,16 +48,66 @@ declare global {
           left: number;
           right: number;
         };
+        onEvent?: (eventType: string, callback: () => void) => void;
+        offEvent?: (eventType: string, callback: () => void) => void;
       };
     };
   }
 }
 
 export function initTelegramApp() {
-  if (typeof window !== 'undefined' && window.Telegram?.WebApp) {
+  if (typeof window === 'undefined') return;
+
+  const syncSafeAreaAndViewport = () => {
+    const tg = window.Telegram?.WebApp;
+    const contentTop = tg?.contentSafeAreaInset?.top ?? 0;
+    const safeTop = tg?.safeAreaInset?.top ?? 0;
+    const contentBottom = tg?.contentSafeAreaInset?.bottom ?? 0;
+    const safeBottom = tg?.safeAreaInset?.bottom ?? 0;
+    const contentLeft = tg?.contentSafeAreaInset?.left ?? 0;
+    const safeLeft = tg?.safeAreaInset?.left ?? 0;
+    const contentRight = tg?.contentSafeAreaInset?.right ?? 0;
+    const safeRight = tg?.safeAreaInset?.right ?? 0;
+
+    const effectiveTop = Math.max(contentTop, safeTop);
+    const effectiveBottom = Math.max(contentBottom, safeBottom);
+    const effectiveLeft = Math.max(contentLeft, safeLeft);
+    const effectiveRight = Math.max(contentRight, safeRight);
+
+    if (effectiveTop > 0) {
+      document.documentElement.style.setProperty('--safe-top', `${effectiveTop}px`);
+      document.documentElement.style.setProperty('--tg-content-safe-area-inset-top', `${contentTop}px`);
+      document.documentElement.style.setProperty('--tg-safe-area-inset-top', `${safeTop}px`);
+    }
+    if (effectiveBottom > 0) {
+      document.documentElement.style.setProperty('--safe-bottom', `${effectiveBottom}px`);
+      document.documentElement.style.setProperty('--tg-content-safe-area-inset-bottom', `${contentBottom}px`);
+      document.documentElement.style.setProperty('--tg-safe-area-inset-bottom', `${safeBottom}px`);
+    }
+    if (effectiveLeft > 0) {
+      document.documentElement.style.setProperty('--safe-left', `${effectiveLeft}px`);
+    }
+    if (effectiveRight > 0) {
+      document.documentElement.style.setProperty('--safe-right', `${effectiveRight}px`);
+    }
+
+    if (tg?.viewportHeight) {
+      document.documentElement.style.setProperty('--tg-viewport-height', `${tg.viewportHeight}px`);
+      document.documentElement.style.setProperty('--app-height', `${tg.viewportHeight}px`);
+    }
+    if (tg?.viewportStableHeight) {
+      document.documentElement.style.setProperty('--tg-viewport-stable-height', `${tg.viewportStableHeight}px`);
+    }
+  };
+
+  if (window.Telegram?.WebApp) {
     const tg = window.Telegram.WebApp;
-    tg.ready();
-    tg.expand();
+    try {
+      tg.ready();
+      tg.expand();
+    } catch (e) {
+      console.warn('[TMA] ready/expand error:', e);
+    }
 
     // Enable Bot API 8.0 Fullscreen mode
     try {
@@ -61,7 +115,7 @@ export function initTelegramApp() {
         tg.requestFullscreen();
       }
     } catch (e) {
-      console.warn('requestFullscreen error', e);
+      console.warn('[TMA] requestFullscreen error:', e);
     }
 
     // Disable dragging down modal sheet to keep app stable & fullscreen
@@ -70,7 +124,7 @@ export function initTelegramApp() {
         tg.disableVerticalSwipes();
       }
     } catch (e) {
-      console.warn('disableVerticalSwipes error', e);
+      console.warn('[TMA] disableVerticalSwipes error:', e);
     }
 
     try {
@@ -80,20 +134,28 @@ export function initTelegramApp() {
       // Ignored if not supported in old versions
     }
 
-    // Extract Telegram 8.0 Content Safe Area Inset
-    const updateSafeArea = () => {
-      const topInset = tg.contentSafeAreaInset?.top || tg.safeAreaInset?.top || 0;
-      const bottomInset = tg.contentSafeAreaInset?.bottom || tg.safeAreaInset?.bottom || 0;
-      if (topInset > 0) {
-        document.documentElement.style.setProperty('--safe-top', `${topInset}px`);
-      }
-      if (bottomInset > 0) {
-        document.documentElement.style.setProperty('--safe-bottom', `${bottomInset}px`);
-      }
-    };
+    // Synchronize safe areas & viewport immediately
+    syncSafeAreaAndViewport();
 
-    updateSafeArea();
+    // Listen to Telegram WebApp native resize & safe area events
+    try {
+      if (typeof tg.onEvent === 'function') {
+        tg.onEvent('safeAreaChanged', syncSafeAreaAndViewport);
+        tg.onEvent('contentSafeAreaChanged', syncSafeAreaAndViewport);
+        tg.onEvent('viewportChanged', syncSafeAreaAndViewport);
+        tg.onEvent('fullscreenChanged', syncSafeAreaAndViewport);
+      }
+    } catch (e) {
+      console.warn('[TMA] onEvent subscription error:', e);
+    }
   }
+
+  // Also sync on window resize / orientationchange
+  window.addEventListener('resize', syncSafeAreaAndViewport);
+  window.addEventListener('orientationchange', syncSafeAreaAndViewport);
+  // Perform delayed sync as Telegram may inject insets right after initial layout
+  setTimeout(syncSafeAreaAndViewport, 100);
+  setTimeout(syncSafeAreaAndViewport, 500);
 }
 
 export function triggerHaptic(style: 'light' | 'medium' | 'heavy' = 'medium') {
@@ -137,7 +199,7 @@ export function getCurrentUser() {
   else level = 10;
 
   const tgUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
-  if (tgUser) {
+  if (tgUser && tgUser.id) {
     return {
       id: `tg_${tgUser.id}`,
       telegramId: tgUser.id,
@@ -150,8 +212,17 @@ export function getCurrentUser() {
   }
 
   // Fallback for browser development
-  const localId = localStorage.getItem('mono_dev_id') || `dev_${Math.floor(1000 + Math.random() * 9000)}`;
-  localStorage.setItem('mono_dev_id', localId);
+  let localId = `dev_${Math.floor(1000 + Math.random() * 9000)}`;
+  try {
+    const stored = localStorage.getItem('mono_dev_id');
+    if (stored) {
+      localId = stored;
+    } else {
+      localStorage.setItem('mono_dev_id', localId);
+    }
+  } catch {
+    // Ignore localStorage error
+  }
 
   return {
     id: localId,
