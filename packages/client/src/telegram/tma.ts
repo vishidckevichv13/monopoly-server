@@ -69,21 +69,35 @@ export function initTelegramApp() {
     const contentRight = tg?.contentSafeAreaInset?.right ?? 0;
     const safeRight = tg?.safeAreaInset?.right ?? 0;
 
-    const effectiveTop = Math.max(contentTop, safeTop);
-    const effectiveBottom = Math.max(contentBottom, safeBottom);
+    // Detect if running inside actual Telegram Mini App environment
+    const isInsideTelegram = !!(
+      tg &&
+      (tg.initData ||
+        tg.initDataUnsafe?.user ||
+        window.location.hash.includes('tgWebAppData') ||
+        window.location.search.includes('tgWebAppPlatform'))
+    );
+
+    // Prioritize contentSafeAreaInset.top (which accounts for Telegram buttons + hardware notch).
+    // If running in Telegram and insets failed to load or are 0, enforce bulletproof 88px fallback.
+    let effectiveTop = contentTop > 0 ? contentTop : (safeTop > 0 ? safeTop : (isInsideTelegram ? 88 : 12));
+    if (isInsideTelegram && effectiveTop < 60) {
+      // In standard Telegram window with header buttons, minimum top inset is 88px
+      effectiveTop = 88;
+    }
+
+    const effectiveBottom = Math.max(contentBottom, safeBottom, isInsideTelegram ? 24 : 12);
     const effectiveLeft = Math.max(contentLeft, safeLeft);
     const effectiveRight = Math.max(contentRight, safeRight);
 
-    if (effectiveTop > 0) {
-      document.documentElement.style.setProperty('--safe-top', `${effectiveTop}px`);
-      document.documentElement.style.setProperty('--tg-content-safe-area-inset-top', `${contentTop}px`);
-      document.documentElement.style.setProperty('--tg-safe-area-inset-top', `${safeTop}px`);
-    }
-    if (effectiveBottom > 0) {
-      document.documentElement.style.setProperty('--safe-bottom', `${effectiveBottom}px`);
-      document.documentElement.style.setProperty('--tg-content-safe-area-inset-bottom', `${contentBottom}px`);
-      document.documentElement.style.setProperty('--tg-safe-area-inset-bottom', `${safeBottom}px`);
-    }
+    document.documentElement.style.setProperty('--safe-top', `${effectiveTop}px`);
+    document.documentElement.style.setProperty('--tg-content-safe-area-inset-top', `${contentTop > 0 ? contentTop : effectiveTop}px`);
+    document.documentElement.style.setProperty('--tg-safe-area-inset-top', `${safeTop > 0 ? safeTop : 47}px`);
+
+    document.documentElement.style.setProperty('--safe-bottom', `${effectiveBottom}px`);
+    document.documentElement.style.setProperty('--tg-content-safe-area-inset-bottom', `${contentBottom > 0 ? contentBottom : effectiveBottom}px`);
+    document.documentElement.style.setProperty('--tg-safe-area-inset-bottom', `${safeBottom > 0 ? safeBottom : effectiveBottom}px`);
+
     if (effectiveLeft > 0) {
       document.documentElement.style.setProperty('--safe-left', `${effectiveLeft}px`);
     }
@@ -154,7 +168,8 @@ export function initTelegramApp() {
   window.addEventListener('resize', syncSafeAreaAndViewport);
   window.addEventListener('orientationchange', syncSafeAreaAndViewport);
   // Perform delayed sync as Telegram may inject insets right after initial layout
-  setTimeout(syncSafeAreaAndViewport, 100);
+  setTimeout(syncSafeAreaAndViewport, 50);
+  setTimeout(syncSafeAreaAndViewport, 150);
   setTimeout(syncSafeAreaAndViewport, 500);
 }
 
