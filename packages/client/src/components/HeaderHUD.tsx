@@ -26,7 +26,7 @@ export const HeaderHUD: React.FC<HeaderHUDProps> = ({
 
   return (
     <>
-      <div className="w-full bg-slate-900/95 backdrop-blur-2xl border-b-2 border-slate-700/70 px-3 py-2 z-30 shadow-2xl">
+      <div className="w-full bg-slate-900/95 backdrop-blur-2xl border-b-2 border-slate-700/70 px-3 pb-2 pt-[max(var(--safe-top),54px)] z-30 shadow-2xl shrink-0">
         {/* Top row: Players balance scroll row & Pot */}
         <div className="flex items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 flex-1">

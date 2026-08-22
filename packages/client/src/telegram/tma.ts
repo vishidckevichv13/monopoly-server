@@ -79,6 +79,20 @@ export function initTelegramApp() {
     } catch {
       // Ignored if not supported in old versions
     }
+
+    // Extract Telegram 8.0 Content Safe Area Inset
+    const updateSafeArea = () => {
+      const topInset = tg.contentSafeAreaInset?.top || tg.safeAreaInset?.top || 0;
+      const bottomInset = tg.contentSafeAreaInset?.bottom || tg.safeAreaInset?.bottom || 0;
+      if (topInset > 0) {
+        document.documentElement.style.setProperty('--safe-top', `${topInset}px`);
+      }
+      if (bottomInset > 0) {
+        document.documentElement.style.setProperty('--safe-bottom', `${bottomInset}px`);
+      }
+    };
+
+    updateSafeArea();
   }
 }
 

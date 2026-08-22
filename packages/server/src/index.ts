@@ -81,6 +81,18 @@ io.on('connection', (socket) => {
     socket.emit('room_list', roomManager.getRoomList());
   });
 
+  socket.on('check_active_game', (data: { playerId: string; telegramId?: number }) => {
+    const activeRoom = roomManager.getActiveRoomForPlayer(data.playerId, data.telegramId);
+    if (activeRoom && activeRoom.gameState) {
+      socket.emit('active_game_found', {
+        roomId: activeRoom.id,
+        roomName: activeRoom.name
+      });
+    } else {
+      socket.emit('no_active_game');
+    }
+  });
+
   socket.on('create_room', (data: { player: PlayerState; isPrivate?: boolean; maxPlayers?: number }) => {
     const room = roomManager.createRoom(data.player, socket.id, data.isPrivate ?? true, data.maxPlayers ?? 4);
     socket.join(room.id);

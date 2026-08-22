@@ -4,9 +4,24 @@ import {
   ClientAction,
   BOARD_TILES,
   TileDefinition,
+  COLOR_GROUP_MAP,
+  GAME_RULES,
   hasFullMonopoly
 } from '@monopoly/shared';
-import { Dices, Check, ShoppingBag, ArrowUpCircle, XCircle, ArrowLeftRight, Gavel, X } from 'lucide-react';
+import {
+  Dices,
+  Check,
+  ShoppingBag,
+  ArrowUpCircle,
+  XCircle,
+  ArrowLeftRight,
+  Gavel,
+  Lock,
+  Unlock,
+  AlertTriangle,
+  Flame,
+  MinusCircle
+} from 'lucide-react';
 import { triggerHaptic } from '../telegram/tma.js';
 import { PropertyCard, IsometricCoin } from './PropertyCard.js';
 
@@ -50,15 +65,56 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
 
   const canBuyCurrent = isStandingOnUnowned && (myPlayer?.balance || 0) >= (currentTile?.cost || 0);
 
+  const isInspectedOwner = inspectedOwner?.id === myPlayerId;
+  const isInspectedMortgaged = inspectedPropState?.isMortgaged || false;
+  const inspectedLevel = inspectedPropState?.level || 0;
+
+  const alreadyUpgradedThisTurn = inspectedTile
+    ? (gameState.upgradedTilesThisTurn || []).includes(inspectedTile.index)
+    : false;
+
   const canUpgradeInspected =
     isMyTurn &&
     gameState.turnPhase === 'AWAITING_ACTION' &&
     inspectedTile &&
     inspectedTile.type === 'street' &&
-    inspectedOwner?.id === myPlayerId &&
+    isInspectedOwner &&
+    !isInspectedMortgaged &&
+    !alreadyUpgradedThisTurn &&
     hasFullMonopoly(myPlayerId, inspectedTile.group, gameState.propertyStates, gameState.players) &&
-    (inspectedPropState?.level || 0) < 5 &&
+    inspectedLevel < 5 &&
     (myPlayer?.balance || 0) >= (inspectedTile.houseCost || 0);
+
+  // Downgrade / sell house
+  const canDowngradeInspected =
+    isInspectedOwner &&
+    inspectedTile &&
+    inspectedTile.type === 'street' &&
+    inspectedLevel > 0;
+  const downgradeRefund = inspectedTile?.houseCost ? Math.round(inspectedTile.houseCost * 0.5) : 0;
+
+  // Mortgage / Unmortgage
+  const groupTiles = inspectedTile ? (COLOR_GROUP_MAP[inspectedTile.group] || []) : [];
+  const hasBuildingsInGroup = groupTiles.some(
+    (idx) => (gameState.propertyStates[idx]?.level || 0) > 0
+  );
+  const mortgageValue = inspectedTile?.cost ? Math.round(inspectedTile.cost * GAME_RULES.MORTGAGE_PERCENT) : 0;
+  const unmortgageCost = inspectedTile?.cost ? Math.round(inspectedTile.cost * GAME_RULES.UNMORTGAGE_FEE_PERCENT) : 0;
+
+  const canMortgageInspected =
+    isInspectedOwner &&
+    inspectedTile &&
+    !isInspectedMortgaged &&
+    inspectedLevel === 0 &&
+    !hasBuildingsInGroup;
+
+  const canUnmortgageInspected =
+    isInspectedOwner &&
+    inspectedTile &&
+    isInspectedMortgaged &&
+    (myPlayer?.balance || 0) >= unmortgageCost;
+
+  const isPlayerInDebt = (myPlayer?.balance || 0) < 0;
 
   const [multiplier, setMultiplier] = React.useState<number>(1);
 
@@ -140,21 +196,91 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
                 </div>
               )}
 
-              {/* Upgrade Action inside Inspect */}
-              {canUpgradeInspected && (
-                <button
-                  onClick={() => {
-                    triggerHaptic('heavy');
-                    onSendAction({ type: 'UPGRADE_PROPERTY', tileIndex: inspectedTile.index });
-                  }}
-                  className="w-full py-3 btn-3d-blue text-white text-xs font-black rounded-2xl flex items-center justify-center gap-2 shadow-xl active:scale-95 transition"
-                >
-                  <ArrowUpCircle className="w-5 h-5 text-white" />
-                  <span>Построить филиал (${inspectedTile.houseCost})</span>
-                </button>
-              )}
+              {/* Actions inside Inspect: Upgrade, Downgrade, Mortgage, Unmortgage */}
+              <div className="flex flex-col gap-1.5 w-full">
+                {/* 1 Upgrade per turn limit notice */}
+                {alreadyUpgradedThisTurn && isInspectedOwner && !isInspectedMortgaged && inspectedLevel < 5 && (
+                  <div className="w-full py-1.5 px-2 bg-amber-500/20 border border-amber-500/40 rounded-xl text-amber-300 text-[10px] font-bold text-center">
+                    ⏳ Улучшено в этом ходу (1 улучшение за ход)
+                  </div>
+                )}
+
+                {canUpgradeInspected && (
+                  <button
+                    onClick={() => {
+                      triggerHaptic('heavy');
+                      onSendAction({ type: 'UPGRADE_PROPERTY', tileIndex: inspectedTile.index });
+                    }}
+                    className="w-full py-2.5 btn-3d-blue text-white text-xs font-black rounded-2xl flex items-center justify-center gap-2 shadow-xl active:scale-95 transition"
+                  >
+                    <ArrowUpCircle className="w-4 h-4 text-white" />
+                    <span>Построить филиал (${inspectedTile.houseCost}M)</span>
+                  </button>
+                )}
+
+                {canDowngradeInspected && (
+                  <button
+                    onClick={() => {
+                      triggerHaptic('medium');
+                      onSendAction({ type: 'DOWNGRADE_PROPERTY', tileIndex: inspectedTile.index });
+                    }}
+                    className="w-full py-2 bg-amber-700/80 hover:bg-amber-600 text-amber-100 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 border border-amber-500/50 active:scale-95 transition shadow"
+                  >
+                    <MinusCircle className="w-4 h-4 text-amber-300" />
+                    <span>Продать постройку (+${downgradeRefund}M)</span>
+                  </button>
+                )}
+
+                {canMortgageInspected && (
+                  <button
+                    onClick={() => {
+                      triggerHaptic('medium');
+                      onSendAction({ type: 'MORTGAGE_PROPERTY', tileIndex: inspectedTile.index });
+                    }}
+                    className="w-full py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-200 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 border border-rose-500/50 active:scale-95 transition shadow"
+                  >
+                    <Lock className="w-4 h-4 text-rose-400" />
+                    <span>Заложить банку (+${mortgageValue}M)</span>
+                  </button>
+                )}
+
+                {canUnmortgageInspected && (
+                  <button
+                    onClick={() => {
+                      triggerHaptic('heavy');
+                      onSendAction({ type: 'UNMORTGAGE_PROPERTY', tileIndex: inspectedTile.index });
+                    }}
+                    className="w-full py-2 btn-3d-green text-white text-xs font-black rounded-xl flex items-center justify-center gap-1.5 shadow active:scale-95 transition"
+                  >
+                    <Unlock className="w-4 h-4 text-white" />
+                    <span>Выкупить из залога (-${unmortgageCost}M)</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Debt Warning Banner */}
+      {isPlayerInDebt && (
+        <div className="w-full bg-red-950/90 border-2 border-red-500/80 rounded-2xl p-2.5 flex items-center justify-between text-white shadow-lg animate-pulse">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
+            <div className="flex flex-col">
+              <span className="text-xs font-black text-red-200">Задолженность: ${Math.abs(myPlayer?.balance || 0)}M</span>
+              <span className="text-[10px] text-red-300">Заложите недвижимость или продайте постройки</span>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              triggerHaptic('heavy');
+              onSendAction({ type: 'SURRENDER' });
+            }}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-black text-xs rounded-xl shadow active:scale-95 transition shrink-0"
+          >
+            Сдаться
+          </button>
         </div>
       )}
 
@@ -176,7 +302,7 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
               }`}
             >
               <ShoppingBag className="w-4 h-4" />
-              <span>Купить за ${currentTile.cost}</span>
+              <span>{canBuyCurrent ? `Купить за $${currentTile.cost}M` : `Не хватает средств`}</span>
             </button>
 
             <button
@@ -184,7 +310,9 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
                 triggerHaptic('medium');
                 onSendAction({ type: 'DECLINE_BUY_PROPERTY', tileIndex: currentTile.index });
               }}
-              className="flex-1 py-3.5 btn-3d-amber text-slate-950 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition shadow-lg"
+              className={`flex-1 py-3.5 btn-3d-amber text-slate-950 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition shadow-lg ${
+                !canBuyCurrent ? 'animate-bounce ring-4 ring-amber-400/50' : ''
+              }`}
             >
               <Gavel className="w-4 h-4" />
               <span>На аукцион 🔨</span>
@@ -219,31 +347,38 @@ export const BottomActionSheet: React.FC<BottomActionSheetProps> = ({
               </button>
             </div>
           ) : isMyTurn && gameState.turnPhase === 'AWAITING_ACTION' ? (
-            <div className="flex-1 flex items-center gap-2">
-              {/* Trade Button available during player's turn */}
-              <button
-                onClick={() => {
-                  triggerHaptic('medium');
-                  onOpenTrade();
-                }}
-                className="py-3.5 px-4 bg-slate-800 hover:bg-slate-700 border-2 border-amber-400/60 text-amber-300 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 active:scale-95 transition shadow-md shrink-0"
-              >
-                <ArrowLeftRight className="w-4 h-4" />
-                <span>Обмен 🤝</span>
-              </button>
+            !isStandingOnUnowned ? (
+              <div className="flex-1 flex items-center gap-2">
+                {/* Trade Button available during player's turn */}
+                <button
+                  onClick={() => {
+                    triggerHaptic('medium');
+                    onOpenTrade();
+                  }}
+                  className="py-3.5 px-4 bg-slate-800 hover:bg-slate-700 border-2 border-amber-400/60 text-amber-300 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 active:scale-95 transition shadow-md shrink-0"
+                >
+                  <ArrowLeftRight className="w-4 h-4" />
+                  <span>Обмен 🤝</span>
+                </button>
 
-              {/* End Turn Button */}
-              <button
-                onClick={() => {
-                  triggerHaptic('medium');
-                  onSendAction({ type: 'END_TURN' });
-                }}
-                className="flex-1 py-3.5 btn-3d-blue text-white rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition"
-              >
-                <Check className="w-5 h-5" />
-                <span>Завершить ход</span>
-              </button>
-            </div>
+                {/* End Turn Button */}
+                <button
+                  disabled={isPlayerInDebt}
+                  onClick={() => {
+                    triggerHaptic('medium');
+                    onSendAction({ type: 'END_TURN' });
+                  }}
+                  className={`flex-1 py-3.5 rounded-2xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 active:scale-95 transition ${
+                    isPlayerInDebt
+                      ? 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed opacity-60'
+                      : 'btn-3d-blue text-white cursor-pointer'
+                  }`}
+                >
+                  <Check className="w-5 h-5" />
+                  <span>{isPlayerInDebt ? 'Покройте долг' : 'Завершить ход'}</span>
+                </button>
+              </div>
+            ) : null
           ) : gameState.turnPhase === 'AUCTION' ? (
             <div className="w-full py-3 bg-amber-950/50 rounded-2xl text-center text-xs font-black text-amber-300 border border-amber-500/40 flex items-center justify-center gap-2 animate-pulse">
               <Gavel className="w-4 h-4" />

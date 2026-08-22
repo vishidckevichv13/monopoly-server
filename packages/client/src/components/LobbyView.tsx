@@ -54,6 +54,8 @@ interface LobbyViewProps {
     autoStartCountdown?: number | null;
   } | null;
   publicRooms: any[];
+  activeGameRoom?: { roomId: string; roomName: string } | null;
+  onReturnToGame?: () => void;
   onCreateRoom: (maxPlayers?: number, isPrivate?: boolean) => void;
   onJoinRoom: (roomId: string) => void;
   onStartMatchmaking: () => void;
@@ -71,6 +73,8 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
   currentUser,
   currentRoom,
   publicRooms,
+  activeGameRoom,
+  onReturnToGame,
   onCreateRoom,
   onJoinRoom,
   onStartMatchmaking,
@@ -557,6 +561,35 @@ export const LobbyView: React.FC<LobbyViewProps> = ({
         {/* TAB 1: HOME */}
         {activeTab === 'home' && (
           <div className="flex flex-col gap-3.5 animate-fade-in">
+            {/* Active Game Return Banner */}
+            {activeGameRoom && onReturnToGame && (
+              <div className="w-full bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 rounded-3xl p-4 border-2 border-emerald-300 shadow-[0_8px_24px_rgba(16,185,129,0.4)] flex items-center justify-between text-white animate-pulse">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-black/25 flex items-center justify-center text-2xl shadow-inner">
+                    🎲
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-black text-emerald-100 uppercase tracking-wider">
+                      Матч в процессе
+                    </div>
+                    <div className="text-sm font-black text-white">
+                      {activeGameRoom.roomName || `Комната #${activeGameRoom.roomId}`}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    triggerHaptic('heavy');
+                    onReturnToGame();
+                  }}
+                  className="px-4 py-2.5 bg-white text-emerald-950 font-black text-xs sm:text-sm rounded-2xl shadow-xl active:scale-95 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>Вернуться в игру</span>
+                  <ArrowRight className="w-4 h-4 text-emerald-700" />
+                </button>
+              </div>
+            )}
+
             {/* Quick Stat Highlights */}
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-gradient-to-b from-purple-900/40 to-slate-900/90 border border-purple-500/30 rounded-2xl p-2.5 flex flex-col items-center justify-center text-center shadow-md">

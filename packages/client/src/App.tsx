@@ -54,6 +54,7 @@ export const App: React.FC = () => {
   const [publicRooms, setPublicRooms] = useState<any[]>([]);
 
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [activeGameRoom, setActiveGameRoom] = useState<{ roomId: string; roomName: string } | null>(null);
   const [selectedTileIndex, setSelectedTileIndex] = useState<number | null>(null);
   const [isTradeModalOpen, setIsTradeModalOpen] = useState<boolean>(false);
   const [matchSummary, setMatchSummary] = useState<ReturnType<typeof recordMatchResult> | null>(null);
@@ -66,6 +67,12 @@ export const App: React.FC = () => {
 
     socket.on('connect', () => {
       console.log('Connected to game server');
+
+      // Check active game for reconnect
+      socket.emit('check_active_game', {
+        playerId: currentUser.id,
+        telegramId: currentUser.telegramId
+      });
 
       // Check for deep link / Telegram start_param to auto-join lobby
       try {
@@ -86,6 +93,14 @@ export const App: React.FC = () => {
       } catch (err) {
         console.warn('Deep link auto-join error:', err);
       }
+    });
+
+    socket.on('active_game_found', (data: { roomId: string; roomName: string }) => {
+      setActiveGameRoom(data);
+    });
+
+    socket.on('no_active_game', () => {
+      setActiveGameRoom(null);
     });
 
     socket.on('room_created', (data: { roomId: string }) => {
@@ -277,6 +292,7 @@ export const App: React.FC = () => {
         playerId: currentUser.id
       });
     }
+    setActiveGameRoom(null);
     setCurrentRoom(null);
     setGameState(null);
     setSelectedTileIndex(null);
@@ -284,15 +300,26 @@ export const App: React.FC = () => {
     matchResultRecordedRef.current = false;
   };
 
+  const handleReturnToGame = () => {
+    if (!activeGameRoom) return;
+    socket.emit('join_room', {
+      roomId: activeGameRoom.roomId,
+      player: currentUser,
+      autoReady: true
+    });
+  };
+
   const isUserSpectator = currentRoom?.players.find((p) => p.id === currentUser.id)?.isSpectator;
 
   return (
-    <div className="flex flex-col h-full h-[100dvh] w-screen max-w-lg mx-auto bg-slate-950 overflow-hidden relative select-none font-sans safe-top-area safe-bottom-area">
+    <div className="flex flex-col h-full h-[100dvh] w-screen max-w-lg mx-auto bg-slate-950 overflow-hidden relative select-none font-sans">
       {!gameState ? (
         <LobbyView
           currentUser={currentUser}
           currentRoom={currentRoom}
           publicRooms={publicRooms}
+          activeGameRoom={activeGameRoom}
+          onReturnToGame={handleReturnToGame}
           onCreateRoom={handleCreateRoom}
           onJoinRoom={handleJoinRoom}
           onStartMatchmaking={handleStartMatchmaking}

@@ -60,7 +60,8 @@ export function createInitialGameState(
     jackpot: 100,
     auctionState: null,
     auctionDoneForTurn: false,
-    activeTrade: null
+    activeTrade: null,
+    upgradedTilesThisTurn: []
   };
 }
 
@@ -241,14 +242,12 @@ export function handleTileLanding(
     );
 
     if (player.balance < 0) {
-      updatedState = processPlayerBankruptcy(
-        updatedState,
-        player.id,
-        `${player.displayName} обанкротился на налогах! Вся недвижимость возвращена банку 💀🏦`
+      updatedState.logs.push(
+        makeLog(`⚠️ У ${player.displayName} задолженность ($${player.balance}M). Заложите имущество для покрытия долга!`, 'tax', player.id)
       );
     }
     updatedState.turnPhase = 'AWAITING_ACTION';
-    return checkBankruptcyAndWinner(updatedState);
+    return updatedState;
   }
 
   if (tile.type === 'free_parking') {
@@ -274,14 +273,12 @@ export function handleTileLanding(
     updatedState.logs.push(makeLog(msg, picked >= 0 ? 'bonus' : 'tax', player.id));
 
     if (player.balance < 0) {
-      updatedState = processPlayerBankruptcy(
-        updatedState,
-        player.id,
-        `${player.displayName} обанкротился! Вся недвижимость возвращена банку 💀🏦`
+      updatedState.logs.push(
+        makeLog(`⚠️ У ${player.displayName} задолженность ($${player.balance}M). Заложите имущество для покрытия долга!`, 'tax', player.id)
       );
     }
     updatedState.turnPhase = 'AWAITING_ACTION';
-    return checkBankruptcyAndWinner(updatedState);
+    return updatedState;
   }
 
   if (['street', 'railroad', 'utility'].includes(tile.type)) {
@@ -315,17 +312,15 @@ export function handleTileLanding(
           );
 
           if (player.balance < 0) {
-            updatedState = processPlayerBankruptcy(
-              updatedState,
-              player.id,
-              `${player.displayName} обанкротился на аренде! Вся недвижимость возвращена банку 💀🏦`
+            updatedState.logs.push(
+              makeLog(`⚠️ У ${player.displayName} задолженность ($${player.balance}M). Заложите имущество для покрытия долга!`, 'rent', player.id)
             );
           }
         }
       }
     }
     updatedState.turnPhase = 'AWAITING_ACTION';
-    return checkBankruptcyAndWinner(updatedState);
+    return updatedState;
   }
 
   updatedState.turnPhase = 'AWAITING_ACTION';
@@ -354,6 +349,7 @@ export function executeRollDice(state: GameState, playerId: string): GameState {
     players: updatedPlayers,
     lastDiceResult: dice,
     auctionDoneForTurn: false,
+    upgradedTilesThisTurn: [],
     logs: [
       ...state.logs,
       makeLog(
@@ -380,13 +376,9 @@ export function executeRollDice(state: GameState, playerId: string): GameState {
           makeLog(`${player.displayName} отбыл срок, оплатил штраф $${GAME_RULES.JAIL_FINE}M и вышел на свободу.`, 'jail', player.id)
         );
         if (player.balance < 0) {
-          updatedState = processPlayerBankruptcy(
-            updatedState,
-            player.id,
-            `${player.displayName} обанкротился на штрафе за выход из тюрьмы! Вся недвижимость возвращена банку 💀🏦`
+          updatedState.logs.push(
+            makeLog(`⚠️ У ${player.displayName} задолженность ($${player.balance}M). Заложите имущество для покрытия долга!`, 'jail', player.id)
           );
-          updatedState.turnPhase = 'AWAITING_ACTION';
-          return checkBankruptcyAndWinner(updatedState);
         }
       } else {
         updatedState.logs.push(
@@ -843,6 +835,84 @@ export function executeCancelTrade(
   };
 }
 
+export function getPlayerMortgageableAssets(
+  state: GameState,
+  playerId: string
+): { canMortgage: number[]; canDowngrade: number[]; totalRaiseable: number } {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return { canMortgage: [], canDowngrade: [], totalRaiseable: 0 };
+
+  const canDowngrade: number[] = [];
+  let downgradeCash = 0;
+  const canMortgage: number[] = [];
+  let mortgageCash = 0;
+
+  player.properties.forEach((tileIdx) => {
+    const tile = BOARD_TILES[tileIdx];
+    const propState = state.propertyStates[tileIdx];
+    if (tile && tile.type === 'street' && propState && propState.level > 0 && tile.houseCost) {
+      canDowngrade.push(tileIdx);
+      downgradeCash += propState.level * Math.round(tile.houseCost * 0.5);
+    }
+  });
+
+  player.properties.forEach((tileIdx) => {
+    const tile = BOARD_TILES[tileIdx];
+    const propState = state.propertyStates[tileIdx];
+    const isMortgaged = propState?.isMortgaged || false;
+    if (tile && tile.cost && !isMortgaged) {
+      canMortgage.push(tileIdx);
+      mortgageCash += Math.round(tile.cost * GAME_RULES.MORTGAGE_PERCENT);
+    }
+  });
+
+  return {
+    canMortgage,
+    canDowngrade,
+    totalRaiseable: downgradeCash + mortgageCash
+  };
+}
+
+export function executeDowngradeProperty(
+  state: GameState,
+  playerId: string,
+  tileIndex: number
+): GameState {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || !player.properties.includes(tileIndex)) return state;
+
+  const tile = BOARD_TILES[tileIndex];
+  if (!tile || tile.type !== 'street' || !tile.houseCost) return state;
+
+  const propState = state.propertyStates[tileIndex];
+  if (!propState || propState.level <= 0) return state;
+
+  const refundAmount = Math.round(tile.houseCost * 0.5);
+  const updatedPlayers = state.players.map((p) =>
+    p.id === playerId ? { ...p, balance: p.balance + refundAmount } : p
+  );
+
+  const nextLevel = propState.level - 1;
+  const levelName = nextLevel === 0 ? 'базового состояния' : nextLevel === 4 ? '4 филиалов' : `Филиала №${nextLevel}`;
+
+  return {
+    ...state,
+    players: updatedPlayers,
+    propertyStates: {
+      ...state.propertyStates,
+      [tileIndex]: { ...propState, level: nextLevel }
+    },
+    logs: [
+      ...state.logs,
+      makeLog(
+        `${player.displayName} продал постройку на «${tile.name}» (до ${levelName}) за +$${refundAmount}M 🔨`,
+        'info',
+        player.id
+      )
+    ]
+  };
+}
+
 export function executeUpgradeProperty(
   state: GameState,
   playerId: string,
@@ -850,6 +920,11 @@ export function executeUpgradeProperty(
 ): GameState {
   const player = state.players.find((p) => p.id === playerId);
   if (!player || !player.properties.includes(tileIndex)) return state;
+
+  // 1 upgrade per street per turn rule
+  if (state.upgradedTilesThisTurn && state.upgradedTilesThisTurn.includes(tileIndex)) {
+    return state;
+  }
 
   const tile = BOARD_TILES[tileIndex];
   if (!tile || tile.type !== 'street' || !tile.houseCost) return state;
@@ -874,6 +949,7 @@ export function executeUpgradeProperty(
       ...state.propertyStates,
       [tileIndex]: { ...propState, level: nextLevel }
     },
+    upgradedTilesThisTurn: [...(state.upgradedTilesThisTurn || []), tileIndex],
     logs: [
       ...state.logs,
       makeLog(
@@ -1015,6 +1091,35 @@ export function executeEndTurn(state: GameState, playerId: string): GameState {
 
   if (state.turnPhase === 'WAITING_FOR_ROLL' || state.turnPhase === 'AUCTION') return state;
 
+  // 1. If active player is on an unowned buyable property and has not bought or auctioned it, force auction
+  const currentTile = BOARD_TILES[activePlayer.position];
+  const isUnownedBuyable =
+    !state.auctionDoneForTurn &&
+    currentTile &&
+    ['street', 'railroad', 'utility'].includes(currentTile.type) &&
+    !state.players.some((p) => p.properties.includes(currentTile.index));
+
+  if (isUnownedBuyable) {
+    return executeStartAuction(state, currentTile.index);
+  }
+
+  // 2. If player is in debt (balance < 0)
+  if (activePlayer.balance < 0) {
+    const assets = getPlayerMortgageableAssets(state, activePlayer.id);
+    if (activePlayer.balance + assets.totalRaiseable < 0) {
+      // Insolvent - cannot cover debt even by liquidating everything -> bankrupt
+      const bankruptState = processPlayerBankruptcy(
+        state,
+        activePlayer.id,
+        `${activePlayer.displayName} не смог расплатиться с долгами и признан банкротом! 💀🏦`
+      );
+      return checkBankruptcyAndWinner(bankruptState);
+    } else {
+      // Still has assets to mortgage or sell to cover debt -> cannot finish turn while in debt!
+      return state;
+    }
+  }
+
   let nextIndex = (state.activePlayerIndex + 1) % state.players.length;
   let attempts = 0;
   while ((state.players[nextIndex].isBankrupt || state.players[nextIndex].isSpectator) && attempts < state.players.length) {
@@ -1033,6 +1138,7 @@ export function executeEndTurn(state: GameState, playerId: string): GameState {
     lastDiceResult: null,
     activeTrade: null,
     auctionDoneForTurn: false,
+    upgradedTilesThisTurn: [],
     logs: [
       ...state.logs,
       makeLog(`Ход переходит к игроку ${nextPlayer.displayName} 🎯`, 'info', nextPlayer.id)

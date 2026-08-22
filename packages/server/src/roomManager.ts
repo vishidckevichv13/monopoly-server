@@ -15,11 +15,13 @@ import {
   executeRejectTrade,
   executeCancelTrade,
   executeUpgradeProperty,
+  executeDowngradeProperty,
   executeMortgageProperty,
   executeUnmortgageProperty,
   executePayJailFine,
   executeEndTurn,
   executeSurrender,
+  getPlayerMortgageableAssets,
   BOARD_TILES,
   GAME_RULES,
   hasFullMonopoly
@@ -320,11 +322,18 @@ export class RoomManager {
 
     if (!room) return null;
 
-    const existingIdx = room.players.findIndex((p: PlayerState) => p.id === player.id);
+    const existingIdx = room.players.findIndex(
+      (p: PlayerState) => p.id === player.id || (player.telegramId && p.telegramId === player.telegramId)
+    );
     if (existingIdx >= 0) {
-      room.sockets.set(player.id, socketId);
+      const existingPlayer = room.players[existingIdx];
+      room.sockets.set(existingPlayer.id, socketId);
       if (autoReady) {
         room.players[existingIdx].isReady = true;
+      }
+      this.broadcastRoom(room);
+      if (room.gameState) {
+        this.broadcastGameState(room);
       }
       return room;
     }
@@ -660,6 +669,7 @@ export class RoomManager {
         nextState = executeUpgradeProperty(nextState, playerId, action.tileIndex);
         break;
       case 'DOWNGRADE_PROPERTY':
+        nextState = executeDowngradeProperty(nextState, playerId, action.tileIndex);
         break;
       case 'MORTGAGE_PROPERTY':
         nextState = executeMortgageProperty(nextState, playerId, action.tileIndex);
@@ -686,6 +696,23 @@ export class RoomManager {
     this.processBotTurn(room);
   }
 
+  public isControlledByBot(room: ActiveRoom, player: PlayerState): boolean {
+    if (player.isBot) return true;
+    return !room.sockets.has(player.id);
+  }
+
+  public getActiveRoomForPlayer(playerId: string, telegramId?: number): ActiveRoom | undefined {
+    for (const room of this.rooms.values()) {
+      if (room.gameState && room.gameState.turnPhase !== 'GAME_OVER') {
+        const found = room.players.some(
+          (p) => !p.isBankrupt && !p.isSpectator && (p.id === playerId || (telegramId && p.telegramId === telegramId))
+        );
+        if (found) return room;
+      }
+    }
+    return undefined;
+  }
+
   public processBotTurn(room: ActiveRoom): void {
     if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
 
@@ -699,7 +726,7 @@ export class RoomManager {
       const auction = room.gameState.auctionState;
       const tile = BOARD_TILES[auction.tileIndex];
       const botParticipants = room.gameState.players.filter(
-        (p: PlayerState) => p.isBot && !p.isBankrupt && auction.activeParticipantIds.includes(p.id)
+        (p: PlayerState) => this.isControlledByBot(room, p) && !p.isBankrupt && auction.activeParticipantIds.includes(p.id)
       );
 
       if (botParticipants.length > 0) {
@@ -728,7 +755,9 @@ export class RoomManager {
     // Handle Bot in Active Trade Offer
     if (room.gameState.activeTrade) {
       const trade = room.gameState.activeTrade;
-      const targetBot = room.gameState.players.find((p: PlayerState) => p.id === trade.targetId && p.isBot);
+      const targetBot = room.gameState.players.find(
+        (p: PlayerState) => p.id === trade.targetId && this.isControlledByBot(room, p)
+      );
       if (targetBot) {
         room.botTurnTimeout = setTimeout(() => {
           if (!room.gameState || !room.gameState.activeTrade) return;
@@ -747,7 +776,7 @@ export class RoomManager {
     }
 
     const activePlayer = room.gameState.players[room.gameState.activePlayerIndex];
-    if (!activePlayer || !activePlayer.isBot || activePlayer.isBankrupt) {
+    if (!activePlayer || !this.isControlledByBot(room, activePlayer) || activePlayer.isBankrupt) {
       return;
     }
 
@@ -756,7 +785,7 @@ export class RoomManager {
       room.botTurnTimeout = setTimeout(() => {
         if (!room.gameState || room.gameState.turnPhase !== 'WAITING_FOR_ROLL') return;
         const currentBot = room.gameState.players[room.gameState.activePlayerIndex];
-        if (!currentBot || !currentBot.isBot || currentBot.isBankrupt) return;
+        if (!currentBot || !this.isControlledByBot(room, currentBot) || currentBot.isBankrupt) return;
 
         if (currentBot.inJail && currentBot.balance >= GAME_RULES.JAIL_FINE) {
           room.gameState = executePayJailFine(room.gameState, currentBot.id);
@@ -773,8 +802,8 @@ export class RoomManager {
     if (room.gameState.turnPhase === 'AWAITING_ACTION') {
       room.botTurnTimeout = setTimeout(() => {
         if (!room.gameState || room.gameState.turnPhase !== 'AWAITING_ACTION') return;
-        const currentBot = room.gameState.players[room.gameState.activePlayerIndex];
-        if (!currentBot || !currentBot.isBot || currentBot.isBankrupt) return;
+        let currentBot = room.gameState.players[room.gameState.activePlayerIndex];
+        if (!currentBot || !this.isControlledByBot(room, currentBot) || currentBot.isBankrupt) return;
 
         const currentPos = currentBot.position;
         const tile = BOARD_TILES[currentPos];
@@ -790,15 +819,31 @@ export class RoomManager {
           room.gameState = executeStartAuction(room.gameState, currentPos);
         }
 
-        // Bot property upgrade logic
-        if (room.gameState.turnPhase === 'AWAITING_ACTION') {
+        // If bot is in debt, auto-mortgage or downgrade to clear debt
+        currentBot = room.gameState.players[room.gameState.activePlayerIndex];
+        if (currentBot && currentBot.balance < 0) {
+          const assets = getPlayerMortgageableAssets(room.gameState, currentBot.id);
+          for (const pIdx of assets.canDowngrade) {
+            if ((room.gameState.players.find((p) => p.id === currentBot.id)?.balance || 0) >= 0) break;
+            room.gameState = executeDowngradeProperty(room.gameState, currentBot.id, pIdx);
+          }
+          for (const pIdx of assets.canMortgage) {
+            if ((room.gameState.players.find((p) => p.id === currentBot.id)?.balance || 0) >= 0) break;
+            room.gameState = executeMortgageProperty(room.gameState, currentBot.id, pIdx);
+          }
+        }
+
+        // Bot property upgrade logic (if monopoly and extra cash)
+        currentBot = room.gameState.players[room.gameState.activePlayerIndex];
+        if (room.gameState.turnPhase === 'AWAITING_ACTION' && currentBot && currentBot.balance > 200) {
           for (const pIdx of currentBot.properties) {
             const propTile = BOARD_TILES[pIdx];
             if (
               propTile &&
               propTile.houseCost &&
               hasFullMonopoly(currentBot.id, propTile.group, room.gameState.propertyStates, room.gameState.players) &&
-              currentBot.balance >= propTile.houseCost + 200
+              currentBot.balance >= propTile.houseCost + 200 &&
+              !room.gameState.upgradedTilesThisTurn?.includes(pIdx)
             ) {
               const pState = room.gameState.propertyStates[pIdx];
               if (!pState || pState.level < 5) {
@@ -815,7 +860,7 @@ export class RoomManager {
         setTimeout(() => {
           if (!room.gameState || room.gameState.turnPhase === 'GAME_OVER') return;
           const endBot = room.gameState.players[room.gameState.activePlayerIndex];
-          if (!endBot || !endBot.isBot) return;
+          if (!endBot || !this.isControlledByBot(room, endBot)) return;
 
           room.gameState = executeEndTurn(room.gameState, endBot.id);
           this.broadcastGameState(room);

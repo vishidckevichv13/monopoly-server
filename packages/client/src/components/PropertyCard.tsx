@@ -265,14 +265,14 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
 
   // Card Content Component (Identical Vertical Card structure for all edges)
   const renderCardContent = () => (
-    <div className="w-full h-full rounded-[10px] bg-white flex flex-col overflow-hidden relative shadow-sm">
+    <div className={`w-full h-full rounded-[10px] bg-white flex flex-col overflow-hidden relative shadow-sm ${isMortgaged ? 'opacity-85' : ''}`}>
       {/* Top Brand Banner Section (66% height) */}
       <div
         className="w-full h-[66%] relative flex items-center justify-center p-1 overflow-hidden"
         style={{ backgroundColor: isStreetOrBuyable ? groupBgColor : '#F1F5F9' }}
       >
         {/* Upgrades (Houses / Hotel) Top-Right Indicator */}
-        {isBought && level > 0 && (
+        {isBought && level > 0 && !isMortgaged && (
           <div className="absolute top-1 right-1 flex items-center gap-0.5 z-20 bg-black/30 backdrop-blur-sm px-1 py-0.5 rounded border border-white/30">
             {level === 5 ? (
               <HotelBadge size="sm" />
@@ -284,8 +284,17 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
           </div>
         )}
 
+        {/* Mortgaged Overlay Badge */}
+        {isMortgaged && (
+          <div className="absolute inset-0 bg-red-950/80 backdrop-blur-[2px] z-20 flex flex-col items-center justify-center p-0.5 text-center">
+            <span className="text-amber-400 font-black text-[9px] tracking-wider uppercase border border-amber-400/80 px-1 py-0.2 bg-black/70 rounded">
+              🔒 ЗАЛОГ
+            </span>
+          </div>
+        )}
+
         {/* Clean 1:1 SVG Brand Logo or Special Tile Icon */}
-        <div className="relative z-10 flex items-center justify-center w-full h-full p-1">
+        <div className={`relative z-10 flex items-center justify-center w-full h-full p-1 ${isMortgaged ? 'grayscale opacity-40' : ''}`}>
           {isStreetOrBuyable ? (
             <BrandLogo
               name={tile.name}
@@ -303,7 +312,11 @@ export const PropertyCard: React.FC<PropertyCardProps> = ({
 
       {/* Base Section (Bottom: 34% height) - Price & Currency */}
       <div className="w-full h-[34%] bg-white px-1 py-0.5 flex flex-col justify-center items-center">
-        {tile.cost ? (
+        {isMortgaged ? (
+          <span className="text-[8px] font-extrabold text-red-600 uppercase leading-none">
+            ЗАЛОЖЕНО
+          </span>
+        ) : tile.cost ? (
           <div className="flex items-center justify-center gap-0.5 w-full">
             <span className="text-[10px] font-black text-slate-900 leading-none">
               {displayPrice}

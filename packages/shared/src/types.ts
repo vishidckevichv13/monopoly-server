@@ -125,6 +125,7 @@ export interface GameState {
   auctionState: AuctionState | null;
   auctionDoneForTurn?: boolean;
   activeTrade: TradeOffer | null;
+  upgradedTilesThisTurn?: number[];
 }
 
 export interface RoomSettings {
